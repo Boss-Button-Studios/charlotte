@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Charlotte — Boss Button Studios</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --black:   #0d0d0d;
+    --off:     #141414;
+    --panel:   #1a1a1a;
+    --border:  #2a2a2a;
+    --muted:   #555;
+    --mid:     #888;
+    --light:   #ccc;
+    --white:   #f0ede8;
+    --gold:    #c8a96e;
+    --gold-dk: #8a6f3e;
+    --red:     #c0392b;
+    --green:   #27ae60;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--black);
+    color: var(--light);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 300;
+    font-size: 15px;
+    line-height: 1.75;
+    min-height: 100vh;
+  }
+
+  /* ── Silk thread SVG background ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      repeating-linear-gradient(
+        -30deg,
+        transparent,
+        transparent 120px,
+        rgba(200, 169, 110, 0.015) 120px,
+        rgba(200, 169, 110, 0.015) 121px
+      ),
+      repeating-linear-gradient(
+        60deg,
+        transparent,
+        transparent 180px,
+        rgba(200, 169, 110, 0.01) 180px,
+        rgba(200, 169, 110, 0.01) 181px
+      );
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; padding: 0 2rem 6rem; }
+
+  /* ── Hero ── */
+  .hero {
+    padding: 5rem 0 3rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 3rem;
+  }
+
+  .org-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .org-tag::before {
+    content: '';
+    display: inline-block;
+    width: 24px;
+    height: 1px;
+    background: var(--gold);
+  }
+
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(3.5rem, 8vw, 6rem);
+    font-weight: 400;
+    line-height: 1.0;
+    color: var(--white);
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--gold);
+  }
+
+  .version-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-bottom: 2rem;
+  }
+
+  .lede {
+    font-size: 1.15rem;
+    color: var(--mid);
+    max-width: 540px;
+    line-height: 1.65;
+    margin-bottom: 2rem;
+    font-style: italic;
+    font-family: 'Playfair Display', serif;
+  }
+
+  .badges {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  .badge.gold { border-color: var(--gold-dk); color: var(--gold); }
+
+  /* ── Sections ── */
+  section { margin-bottom: 3.5rem; }
+
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.5rem;
+    font-weight: 400;
+    color: var(--white);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+  }
+
+  h2::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+    max-width: 120px;
+  }
+
+  h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.75rem;
+    margin-top: 1.75rem;
+  }
+
+  p { color: #999; margin-bottom: 0.85rem; }
+  p:last-child { margin-bottom: 0; }
+
+  /* ── The quote ── */
+  .web-quote {
+    border-left: 2px solid var(--gold);
+    padding: 1.25rem 1.5rem;
+    margin: 2rem 0;
+    background: var(--off);
+  }
+
+  .web-quote p {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.1rem;
+    font-style: italic;
+    color: var(--light);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  .web-quote cite {
+    display: block;
+    margin-top: 0.5rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    font-style: normal;
+  }
+
+  /* ── Code blocks ── */
+  pre {
+    background: var(--off);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--gold-dk);
+    padding: 1.25rem 1.5rem;
+    overflow-x: auto;
+    margin: 1rem 0 1.5rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: #aaa;
+  }
+
+  code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.82em;
+    color: var(--gold);
+    background: rgba(200, 169, 110, 0.08);
+    padding: 0.1em 0.35em;
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .comment { color: var(--muted); }
+  .kw { color: #7ec8c8; }
+  .str { color: #a8c97f; }
+  .fn { color: var(--white); }
+  .param { color: #c8a96e; }
+
+  /* ── Feature grid ── */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin: 1.5rem 0;
+  }
+
+  @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+
+  .feature {
+    background: var(--off);
+    padding: 1.25rem 1.5rem;
+  }
+
+  .feature-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 0.4rem;
+  }
+
+  .feature p { font-size: 0.88rem; color: var(--muted); margin: 0; }
+
+  /* ── Install block ── */
+  .install {
+    background: var(--off);
+    border: 1px solid var(--border);
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 1.5rem 0;
+  }
+
+  .install-cmd {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9rem;
+    color: var(--white);
+  }
+
+  .install-cmd span { color: var(--gold); }
+
+  /* ── Table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 1rem 0 1.5rem;
+  }
+
+  th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: #888;
+    vertical-align: top;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  td:first-child { color: var(--light); font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
+
+  /* ── Non-goals ── */
+  .nopes {
+    display: grid;
+    gap: 0.5rem;
+    margin: 1rem 0;
+  }
+
+  .nope {
+    display: flex;
+    gap: 0.85rem;
+    align-items: baseline;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+
+  .nope::before {
+    content: '✕';
+    color: var(--red);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Version table ── */
+  .versions {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin: 1.5rem 0;
+  }
+
+  @media (max-width: 560px) { .versions { grid-template-columns: repeat(2, 1fr); } }
+
+  .version {
+    background: var(--off);
+    padding: 1rem 1.25rem;
+    text-align: center;
+  }
+
+  .version-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-bottom: 0.4rem;
+  }
+
+  .version-name {
+    font-family: 'Playfair Display', serif;
+    font-size: 1rem;
+    font-style: italic;
+    color: var(--gold);
+  }
+
+  .version.current .version-name { color: var(--white); }
+  .version.current { background: var(--panel); }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 2rem;
+    margin-top: 4rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  footer p {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    margin: 0;
+  }
+
+  footer a { color: var(--gold); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* ── Subtle web animation ── */
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  .web-icon {
+    display: inline-block;
+    opacity: 0.4;
+    animation: spin-slow 60s linear infinite;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <div class="org-tag">Boss Button Studios</div>
+    <h1>Char<em>lotte</em></h1>
+    <div class="version-badge">v1.2 — SOME PIG &nbsp;·&nbsp; charlotte-crawler</div>
+    <p class="lede">A goal-directed web navigation agent. Tell her what you're looking for. She'll find it.</p>
+    <div class="badges">
+      <span class="badge gold">Python 3.11+</span>
+      <span class="badge">MIT License</span>
+      <span class="badge">PyPI</span>
+      <span class="badge">BYOM</span>
+      <span class="badge">Self-hostable</span>
+    </div>
+  </header>
+
+  <div class="web-quote">
+    <p>It is not often that someone comes along who is a true friend and a good writer.</p>
+    <cite>— E.B. White, Charlotte's Web</cite>
+  </div>
+
+  <section>
+    <h2>What she does</h2>
+    <p>Charlotte takes a URL and a plain-language goal and navigates to find it. She evaluates each page, decides which links are worth following, and stops when she's done — or when she runs out of budget. She does not index. She does not scrape blindly.</p>
+    <p>Traditional scrapers are brittle — they break when a site rearranges its pages. Charlotte navigates by meaning. A page that renames its button from <code>"Download Directory"</code> to <code>"Get the Current PDF"</code> is still navigable.</p>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-title">Goal-directed</div>
+        <p>Natural language goal. One model call per page. Stops when found.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-title">BYOM</div>
+        <p>Any instruct-tuned model. Cloud or self-hosted. Groq and Ollama ship by default.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Hard budgets</div>
+        <p>Max pages, max depth, four independent timeouts. Safe to call in automated pipelines.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Injection-resistant</div>
+        <p>Three-layer sanitization pipeline. URL provenance check. Trust model throughout.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Single or multi-result</div>
+        <p><code>max_results=None</code> collects all matching links within budget.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Honest</div>
+        <p>Identifies itself in the User-Agent. Respects <code>robots.txt</code> by default.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Install</h2>
+
+    <div class="install">
+      <div class="install-cmd"><span>pip install</span> charlotte-crawler</div>
+    </div>
+
+    <p>Playwright is optional — only required when <code>render_js=True</code>:</p>
+<pre><code>pip install charlotte-crawler[playwright]
+playwright install chromium</code></pre>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+
+    <h3>Find a single link</h3>
+<pre><code><span class="kw">from</span> charlotte <span class="kw">import</span> find_link
+
+result = <span class="fn">find_link</span>(
+    <span class="param">start_url</span>=<span class="str">"https://www.example.gov/services"</span>,
+    <span class="param">goal</span>=<span class="str">"Find the current annual services directory PDF"</span>,
+    <span class="param">navigation_hint</span>=<span class="str">"Usually linked from the Publications section"</span>
+)
+
+<span class="kw">if</span> result.found:
+    <span class="fn">print</span>(result.urls[<span class="str">0</span>])  <span class="comment"># → https://example.gov/.../directory-2026.pdf</span></code></pre>
+
+    <h3>Collect multiple links</h3>
+<pre><code>result = <span class="fn">find_link</span>(
+    <span class="param">start_url</span>=<span class="str">"https://www.example.gov/regions"</span>,
+    <span class="param">goal</span>=<span class="str">"Find all regional directory PDFs"</span>,
+    <span class="param">navigation_hint</span>=<span class="str">"Directories are in a dropdown, one per region"</span>
+    <span class="comment"># max_results=None by default — collect all</span>
+)
+<span class="comment"># result.urls → [north.pdf, south.pdf, east.pdf, west.pdf]</span></code></pre>
+
+    <h3>Full navigation with metadata</h3>
+<pre><code><span class="kw">from</span> charlotte <span class="kw">import</span> crawl
+
+result = <span class="fn">crawl</span>(
+    <span class="param">start_url</span>=<span class="str">"https://www.lincolnhigh.edu"</span>,
+    <span class="param">goal</span>=<span class="str">"Find the academic calendar page"</span>,
+    <span class="param">navigation_hint</span>=<span class="str">"Usually under Parents or Academics"</span>,
+    <span class="param">max_pages</span>=<span class="str">10</span>
+)
+<span class="comment"># result.result_urls, result.visit_log, result.pages_visited ...</span></code></pre>
+
+    <h3>Self-hosted (Ollama)</h3>
+<pre><code><span class="kw">from</span> charlotte <span class="kw">import</span> crawl
+<span class="kw">from</span> charlotte.adapters <span class="kw">import</span> LocalAdapter
+
+result = <span class="fn">crawl</span>(
+    <span class="param">start_url</span>=url,
+    <span class="param">goal</span>=goal,
+    <span class="param">model</span>=<span class="fn">LocalAdapter</span>()  <span class="comment"># points to localhost:11434 by default</span>
+)</code></pre>
+  </section>
+
+  <section>
+    <h2>Models</h2>
+    <p>Charlotte makes one model call per page visited. Speed and cost per call matter. Any instruct-tuned model that produces reliable structured JSON output works.</p>
+
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Via</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Llama 3 8B Instruct</td><td>Groq</td><td>Default for cloud. Fast, cheap.</td></tr>
+        <tr><td>Llama 3 8B Instruct</td><td>Ollama</td><td>Default for self-hosted via LocalAdapter.</td></tr>
+        <tr><td>Mistral 7B Instruct</td><td>Groq / Together.ai</td><td>Strong alternative. Good structured output.</td></tr>
+        <tr><td>Llama 3 70B Instruct</td><td>Groq / Together.ai</td><td>Better on ambiguous navigation. Higher cost.</td></tr>
+        <tr><td>Claude Haiku</td><td>Anthropic</td><td>Fast, strong instruction following.</td></tr>
+        <tr><td>Phi-3 Mini</td><td>Ollama</td><td>Lighter local option. Verify output reliability.</td></tr>
+      </tbody>
+    </table>
+
+    <p>The <code>LocalAdapter</code> is a fully supported production path — not a development shortcut. Self-hosted inference is the right choice for any deployment where you control the model host and want zero per-query API costs.</p>
+  </section>
+
+  <section>
+    <h2>What Charlotte is not</h2>
+    <div class="nopes">
+      <div class="nope">A bulk crawler or site indexer</div>
+      <div class="nope">A search engine replacement</div>
+      <div class="nope">An authenticated session handler</div>
+      <div class="nope">A captcha solver or bot-detection workaround</div>
+      <div class="nope">A caching or persistence layer</div>
+      <div class="nope">An autonomous web agent that changes its own goals mid-run</div>
+    </div>
+    <p>Charlotte is purposefully narrow. The spec is <a href="SPEC.md">here</a>.</p>
+  </section>
+
+  <section>
+    <h2>Environment variables</h2>
+    <table>
+      <thead>
+        <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>CHARLOTTE_DEFAULT_ADAPTER</td><td>groq</td><td><code>groq</code> or <code>local</code></td></tr>
+        <tr><td>CHARLOTTE_LOCAL_BASE_URL</td><td>http://localhost:11434</td><td>LocalAdapter endpoint</td></tr>
+        <tr><td>CHARLOTTE_LOCAL_MODEL</td><td>llama3:8b</td><td>LocalAdapter model name</td></tr>
+        <tr><td>CHARLOTTE_STREAM</td><td>true</td><td>Stream events by default</td></tr>
+        <tr><td>CHARLOTTE_RESPECT_ROBOTS</td><td>true</td><td>Obey robots.txt by default</td></tr>
+        <tr><td>GROQ_API_KEY</td><td>—</td><td>Required for GroqAdapter</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Versioning</h2>
+    <p>Major releases are named after the words Charlotte weaves into her web.</p>
+    <div class="versions">
+      <div class="version current">
+        <div class="version-num">1.x</div>
+        <div class="version-name">Some Pig</div>
+      </div>
+      <div class="version">
+        <div class="version-num">2.x</div>
+        <div class="version-name">Terrific</div>
+      </div>
+      <div class="version">
+        <div class="version-num">3.x</div>
+        <div class="version-name">Radiant</div>
+      </div>
+      <div class="version">
+        <div class="version-num">4.x</div>
+        <div class="version-name">Humble</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Contributing</h2>
+    <p>Open an issue. Read <a href="SPEC.md">SPEC.md</a> before proposing changes — most design decisions are deliberate and documented there. The test matrix in Section 19 of the spec is the baseline; new features should come with new rows.</p>
+    <p>Writing an adapter for a new model provider? The contract is in Section 6.3. Adapter output validation is Charlotte's responsibility, not yours — you only need to produce the five required fields.</p>
+  </section>
+
+  <footer>
+    <p><span class="web-icon">✦</span> &nbsp; Boss Button Studios &nbsp;·&nbsp; <a href="SPEC.md">Spec</a> &nbsp;·&nbsp; <a href="https://pypi.org/project/charlotte-crawler/">PyPI</a></p>
+    <p>MIT License</p>
+  </footer>
+
+</div>
+</body>
+</html>
