@@ -1,0 +1,212 @@
+"""
+Crawl engine — adapter output validation layer (CHAR-006).
+
+This module grows incrementally:
+  CHAR-006 (this task): adapter output validation and call_with_validation
+  CHAR-013: full crawl loop, streaming events, budget enforcement
+
+Only the validation layer is implemented here. The full orchestration will
+be added in CHAR-013. See spec §4, §6.5, §12, §17.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+from urllib.parse import urlparse
+
+from charlotte.exceptions import AdapterOutputError
+
+if TYPE_CHECKING:
+    from charlotte.adapters.base import AdapterProtocol
+
+# Injected into the adapter prompt on retry when the first response fails
+# schema validation. Restates all field requirements explicitly. See §6.5.
+_SCHEMA_HINT = (
+    "Your previous response did not match the required output schema. "
+    "You MUST return a JSON object with exactly these fields: "
+    '"found" (boolean), '
+    '"confidence" (float between 0.0 and 1.0 inclusive), '
+    '"result_url" (non-null URL string when found=true, null when found=false), '
+    '"links_to_follow" (array of URL strings, may be empty), '
+    '"reasoning" (non-empty string). '
+    "No extra fields. Respond with JSON only — no prose outside the object."
+)
+
+
+@dataclass
+class AdapterOutput:
+    """Validated adapter output. All fields are guaranteed clean and correct.
+
+    Produced by call_with_validation(). The engine acts only on AdapterOutput,
+    never on the raw dict returned by the adapter. See spec §6.5.
+    """
+
+    found: bool
+    confidence: float
+    result_url: str | None   # Non-null iff found=True
+    links_to_follow: list[str]
+    reasoning: str
+
+
+def _is_valid_url(value: object) -> bool:
+    """Return True if value is a non-empty http/https URL string."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def validate_adapter_output(raw: object) -> AdapterOutput:
+    """Validate raw adapter output against the schema defined in spec §6.5.
+
+    Checks all five required fields for presence, correct types, and
+    constraint satisfaction. Invalid links_to_follow items are silently
+    dropped; all other violations raise ValueError.
+
+    Args:
+        raw: The value returned by the adapter (expected to be a dict).
+
+    Returns:
+        AdapterOutput with all fields validated and cleaned.
+
+    Raises:
+        ValueError: Describes the first constraint violation found.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"adapter output must be a dict, got {type(raw).__name__}")
+
+    # --- found ---
+    if "found" not in raw:
+        raise ValueError("missing required field: 'found'")
+    found = raw["found"]
+    if not isinstance(found, bool):
+        raise ValueError(f"'found' must be a boolean, got {type(found).__name__}")
+
+    # --- confidence ---
+    if "confidence" not in raw:
+        raise ValueError("missing required field: 'confidence'")
+    confidence = raw["confidence"]
+    if not isinstance(confidence, (int, float)):
+        raise ValueError(f"'confidence' must be a float, got {type(confidence).__name__}")
+    confidence = float(confidence)
+    if not (0.0 <= confidence <= 1.0):
+        raise ValueError(f"'confidence' must be in [0.0, 1.0], got {confidence}")
+
+    # --- result_url ---
+    if "result_url" not in raw:
+        raise ValueError("missing required field: 'result_url'")
+    result_url = raw["result_url"]
+    if found:
+        if result_url is None:
+            raise ValueError("'result_url' must not be null when 'found' is true")
+        if not _is_valid_url(result_url):
+            raise ValueError(f"'result_url' is not a valid URL: {result_url!r}")
+    else:
+        if result_url is not None:
+            raise ValueError("'result_url' must be null when 'found' is false")
+
+    # --- links_to_follow ---
+    if "links_to_follow" not in raw:
+        raise ValueError("missing required field: 'links_to_follow'")
+    raw_links = raw["links_to_follow"]
+    if not isinstance(raw_links, list):
+        raise ValueError(
+            f"'links_to_follow' must be a list, got {type(raw_links).__name__}"
+        )
+    # Invalid URL items are silently dropped; the response is not rejected.
+    links_to_follow = [item for item in raw_links if _is_valid_url(item)]
+
+    # --- reasoning ---
+    if "reasoning" not in raw:
+        raise ValueError("missing required field: 'reasoning'")
+    reasoning = raw["reasoning"]
+    if not isinstance(reasoning, str):
+        raise ValueError(f"'reasoning' must be a string, got {type(reasoning).__name__}")
+    if not reasoning.strip():
+        raise ValueError("'reasoning' must not be empty or whitespace-only")
+
+    return AdapterOutput(
+        found=found,
+        confidence=confidence,
+        result_url=result_url if found else None,
+        links_to_follow=links_to_follow,
+        reasoning=reasoning,
+    )
+
+
+async def call_with_validation(
+    adapter: "AdapterProtocol",
+    *,
+    goal: str,
+    navigation_hint: str | None,
+    page_title: str,
+    page_url: str,
+    page_summary: str,
+    available_links: list[dict[str, str]],
+    visit_history: list[str],
+    results_so_far: int,
+) -> AdapterOutput:
+    """Call an adapter, validate its output, and retry once with a schema hint.
+
+    On the first schema validation failure, the adapter is called a second time
+    with a schema reminder injected into the prompt (T-09). If the second
+    response also fails validation, AdapterOutputError is raised and the caller
+    should treat the page as unevaluable (T-10). See spec §6.5.
+
+    If the adapter itself raises AdapterOutputError (e.g., API failure), that
+    exception is re-raised immediately without a schema retry.
+
+    Args:
+        adapter: Any object satisfying AdapterProtocol.
+        goal, navigation_hint, page_title, page_url, page_summary,
+        available_links, visit_history, results_so_far: Page context passed
+            directly to the adapter unchanged.
+
+    Returns:
+        Validated AdapterOutput ready for the engine to act on.
+
+    Raises:
+        AdapterOutputError: Adapter raised an exception, or both validation
+            attempts failed.
+    """
+    common: dict = dict(
+        goal=goal,
+        navigation_hint=navigation_hint,
+        page_title=page_title,
+        page_url=page_url,
+        page_summary=page_summary,
+        available_links=available_links,
+        visit_history=visit_history,
+        results_so_far=results_so_far,
+    )
+
+    # First attempt — no schema hint
+    try:
+        raw = await adapter(schema_hint=None, **common)
+    except AdapterOutputError:
+        raise
+    except Exception as exc:
+        raise AdapterOutputError("Adapter call failed before validation") from exc
+    try:
+        return validate_adapter_output(raw)
+    except ValueError:
+        pass  # Fall through to retry with reinforced schema hint
+
+    # Second attempt — reinforced schema hint (T-09 path succeeds here)
+    try:
+        raw = await adapter(schema_hint=_SCHEMA_HINT, **common)
+    except AdapterOutputError:
+        raise
+    except Exception as exc:
+        raise AdapterOutputError("Adapter retry failed before validation") from exc
+    try:
+        return validate_adapter_output(raw)
+    except ValueError as exc:
+        # Both attempts failed (T-10) — treat page as unevaluable
+        raise AdapterOutputError(
+            f"Adapter output failed schema validation after two attempts: {exc}"
+        ) from exc

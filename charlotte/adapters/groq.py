@@ -1,0 +1,177 @@
+"""
+GroqAdapter — calls Llama 3.1 8B Instruct via the Groq API.
+
+Constructs a per-page navigation prompt, calls the Groq API in JSON mode, and
+returns the raw parsed response dict. The engine validates the dict before use.
+
+Requires the 'groq' optional dependency:
+    pip install charlotte-crawler[groq]
+
+Requires a Groq API key via the GROQ_API_KEY environment variable or the
+api_key= constructor argument. See spec §6.3.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+from charlotte.exceptions import AdapterOutputError, CharlotteConfigError
+
+_DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+_SYSTEM_PROMPT = """\
+You are a web navigation assistant. Given a web page and a navigation goal, you \
+evaluate the page and decide whether the goal has been satisfied, and which links \
+are worth following next.
+
+You must respond with a valid JSON object containing exactly these five fields:
+  "found"           — boolean: true only if this page directly satisfies the goal
+  "confidence"      — float: your confidence, between 0.0 and 1.0 inclusive
+  "result_url"      — string or null: URL of the result when found=true; null when found=false
+  "links_to_follow" — array of strings: URLs worth visiting next, best-first; may be empty
+  "reasoning"       — string: brief non-empty explanation of your decision
+
+Rules:
+- Set "found" to true only when the current page itself satisfies the goal.
+- "result_url" must be a URL from this page when found=true, and null when found=false.
+- "links_to_follow" may be non-empty even when found=true if more results may exist.
+- Respond with JSON only. No prose outside the JSON object.\
+"""
+
+
+def _build_user_prompt(
+    *,
+    goal: str,
+    navigation_hint: str | None,
+    page_title: str,
+    page_url: str,
+    page_summary: str,
+    available_links: list[dict[str, str]],
+    visit_history: list[str],
+    results_so_far: int,
+    schema_hint: str | None,
+) -> str:
+    parts: list[str] = []
+
+    if schema_hint:
+        parts.append(schema_hint)
+        parts.append("")
+
+    parts.append(f"Goal: {goal}")
+    if navigation_hint:
+        parts.append(f"Navigation hint: {navigation_hint}")
+
+    parts.append("")
+    parts.append("Current page:")
+    parts.append(f"  Title: {page_title}")
+    parts.append(f"  URL:   {page_url}")
+
+    parts.append("")
+    parts.append("Content summary:")
+    parts.append(page_summary)
+
+    parts.append("")
+    parts.append("Available links (text → URL):")
+    if available_links:
+        for link in available_links:
+            parts.append(f"  {link.get('text', '')} → {link.get('url', '')}")
+    else:
+        parts.append("  (none)")
+
+    parts.append("")
+    parts.append("Previously visited pages:")
+    if visit_history:
+        for visited_url in visit_history:
+            parts.append(f"  {visited_url}")
+    else:
+        parts.append("  (none)")
+
+    parts.append("")
+    parts.append(f"Results found so far: {results_so_far}")
+
+    return "\n".join(parts)
+
+
+class GroqAdapter:
+    """Navigator model adapter for the Groq API.
+
+    Uses Llama 3.1 8B Instruct by default — fast, cheap, and reliable for
+    structured navigation decisions. On API error, the groq SDK retries once
+    with backoff (max_retries=1). If both attempts fail, AdapterOutputError
+    is raised. See spec §6.3.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = _DEFAULT_MODEL,
+    ) -> None:
+        try:
+            from groq import AsyncGroq
+        except ImportError as exc:
+            raise CharlotteConfigError(
+                "GroqAdapter requires the 'groq' package. "
+                "Install it with: pip install charlotte-crawler[groq]"
+            ) from exc
+
+        resolved_key = api_key or os.environ.get("GROQ_API_KEY", "")
+        if not resolved_key:
+            raise CharlotteConfigError(
+                "GroqAdapter requires a Groq API key. "
+                "Set the GROQ_API_KEY environment variable or pass "
+                "api_key= to GroqAdapter()."
+            )
+
+        # max_retries=1: one retry with exponential backoff on transient API errors.
+        self._client = AsyncGroq(api_key=resolved_key, max_retries=1)
+        self._model = model
+
+    async def __call__(
+        self,
+        *,
+        goal: str,
+        navigation_hint: str | None,
+        page_title: str,
+        page_url: str,
+        page_summary: str,
+        available_links: list[dict[str, str]],
+        visit_history: list[str],
+        results_so_far: int,
+        schema_hint: str | None = None,
+    ) -> dict[str, object]:
+        user_prompt = _build_user_prompt(
+            goal=goal,
+            navigation_hint=navigation_hint,
+            page_title=page_title,
+            page_url=page_url,
+            page_summary=page_summary,
+            available_links=available_links,
+            visit_history=visit_history,
+            results_so_far=results_so_far,
+            schema_hint=schema_hint,
+        )
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            raw_content = response.choices[0].message.content or ""
+            return json.loads(raw_content)
+        except json.JSONDecodeError as exc:
+            raise AdapterOutputError(
+                "Groq response was not valid JSON"
+            ) from exc
+        except AdapterOutputError:
+            raise
+        except Exception:
+            # Wrap all groq SDK exceptions (GroqError subclasses) and any other
+            # unexpected errors. The chain is suppressed (from None) to prevent
+            # API keys or response bodies from leaking into tracebacks. See §6.5, §18.
+            raise AdapterOutputError(
+                "Groq API call failed — see logs for detail"
+            ) from None
