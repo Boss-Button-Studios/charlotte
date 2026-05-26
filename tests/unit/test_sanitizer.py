@@ -5,7 +5,7 @@ Covers T-23 (hidden injection text) from the test matrix, plus individual
 tests for each stripping rule defined in spec section 9.1.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -414,3 +414,15 @@ def test_parser_exception_raises_internal_error():
     with patch("charlotte.core.sanitizer.BeautifulSoup", side_effect=RuntimeError("parser crash")):
         with pytest.raises(CharlotteInternalError, match="sanitization failed"):
             strip_hidden("<p>Hello</p>")
+
+
+def test_inner_charlotte_internal_error_reraises_unchanged():
+    # A CharlotteInternalError raised inside the try block must propagate as-is,
+    # not be caught by the outer except and double-wrapped as a new one.
+    inner = CharlotteInternalError("inner failure")
+    mock_soup = MagicMock()
+    mock_soup.find_all.side_effect = inner
+    with patch("charlotte.core.sanitizer.BeautifulSoup", return_value=mock_soup):
+        with pytest.raises(CharlotteInternalError) as exc_info:
+            strip_hidden("<p>Hello</p>")
+    assert exc_info.value is inner
