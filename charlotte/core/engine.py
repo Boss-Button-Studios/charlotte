@@ -185,14 +185,24 @@ async def call_with_validation(
     )
 
     # First attempt — no schema hint
-    raw = await adapter(schema_hint=None, **common)
+    try:
+        raw = await adapter(schema_hint=None, **common)
+    except AdapterOutputError:
+        raise
+    except Exception as exc:
+        raise AdapterOutputError("Adapter call failed before validation") from exc
     try:
         return validate_adapter_output(raw)
     except ValueError:
         pass  # Fall through to retry with reinforced schema hint
 
     # Second attempt — reinforced schema hint (T-09 path succeeds here)
-    raw = await adapter(schema_hint=_SCHEMA_HINT, **common)
+    try:
+        raw = await adapter(schema_hint=_SCHEMA_HINT, **common)
+    except AdapterOutputError:
+        raise
+    except Exception as exc:
+        raise AdapterOutputError("Adapter retry failed before validation") from exc
     try:
         return validate_adapter_output(raw)
     except ValueError as exc:

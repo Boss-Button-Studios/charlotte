@@ -168,11 +168,10 @@ class GroqAdapter:
             ) from exc
         except AdapterOutputError:
             raise
-        except Exception as exc:
+        except Exception:
             # Wrap all groq SDK exceptions (GroqError subclasses) and any other
-            # unexpected errors. The raw exception — which may contain API keys
-            # or response bodies — is chained but not reflected in the message.
-            # Full detail is available via __cause__ in debug contexts. See §6.5, §18.
+            # unexpected errors. The chain is suppressed (from None) to prevent
+            # API keys or response bodies from leaking into tracebacks. See §6.5, §18.
             raise AdapterOutputError(
-                "Groq API call failed — see chained exception for detail"
-            ) from exc
+                "Groq API call failed — see logs for detail"
+            ) from None

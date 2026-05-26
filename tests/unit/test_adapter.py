@@ -315,6 +315,44 @@ async def test_adapter_raises_propagated_immediately():
     adapter.assert_called_once()
 
 
+async def test_adapter_unexpected_exception_wrapped_as_adapter_output_error():
+    """A non-AdapterOutputError from the adapter is wrapped as AdapterOutputError."""
+    adapter = AsyncMock(side_effect=RuntimeError("unexpected crash"))
+    with pytest.raises(AdapterOutputError):
+        await call_with_validation(adapter, **_PAGE_CONTEXT)
+    adapter.assert_called_once()
+
+
+async def test_adapter_unexpected_exception_on_retry_also_wrapped():
+    """A non-AdapterOutputError on the retry attempt is also wrapped."""
+    invalid = {"found": "bad"}  # fails validation → triggers retry
+    adapter = AsyncMock(side_effect=[invalid, RuntimeError("retry crash")])
+    with pytest.raises(AdapterOutputError):
+        await call_with_validation(adapter, **_PAGE_CONTEXT)
+    assert adapter.call_count == 2
+
+
+async def test_adapter_output_error_on_retry_propagated_unchanged():
+    """AdapterOutputError raised on the retry call propagates unchanged."""
+    invalid = {"found": "bad"}  # fails validation → triggers retry
+    error = AdapterOutputError("retry API failure")
+    adapter = AsyncMock(side_effect=[invalid, error])
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await call_with_validation(adapter, **_PAGE_CONTEXT)
+    assert exc_info.value is error
+    assert adapter.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# _is_valid_url — edge cases (coverage)
+# ---------------------------------------------------------------------------
+
+def test_is_valid_url_malformed_ipv6_returns_false():
+    """urlparse raises ValueError on malformed IPv6 — _is_valid_url returns False."""
+    from charlotte.core.engine import _is_valid_url
+    assert _is_valid_url("http://[invalid/path") is False
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — instantiation
 # ---------------------------------------------------------------------------
@@ -433,6 +471,31 @@ async def test_groq_api_error_message_does_not_contain_key(monkeypatch):
     with pytest.raises(AdapterOutputError) as exc_info:
         await adapter(**_PAGE_CONTEXT)
     assert secret_key not in str(exc_info.value)
+
+
+async def test_groq_api_error_chain_suppressed(monkeypatch):
+    """Raw SDK exception is not chained on the AdapterOutputError (from None)."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        side_effect=RuntimeError("sdk detail")
+    )
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    assert exc_info.value.__cause__ is None
+
+
+async def test_groq_adapter_output_error_from_client_reraises(monkeypatch):
+    """AdapterOutputError raised inside the try block is re-raised unchanged."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    adapter._client = MagicMock()
+    original = AdapterOutputError("inner error")
+    adapter._client.chat.completions.create = AsyncMock(side_effect=original)
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    assert exc_info.value is original
 
 
 # ---------------------------------------------------------------------------
