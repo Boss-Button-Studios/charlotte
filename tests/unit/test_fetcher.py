@@ -5,8 +5,10 @@ Covers T-15 through T-20 from the test matrix, plus unit tests for each
 component of the timeout policy, redirect policy, and Playwright stub.
 """
 
-import pytest
+from unittest.mock import PropertyMock, patch
+
 import httpx
+import pytest
 import respx
 
 from charlotte.core.fetcher import FetchResult, PageFetcher
@@ -247,3 +249,53 @@ async def test_redirect_error_is_charlotte_error():
     )
     with pytest.raises(CharlotteError):
         await _fetcher().fetch(f"{_BASE}/page", visited_urls=set())
+
+
+# ---------------------------------------------------------------------------
+# Exception coverage — branches added for spec §18 (no raw httpx to caller)
+# ---------------------------------------------------------------------------
+
+@respx.mock
+async def test_invalid_url_raises_config_error():
+    respx.get(f"{_BASE}/").mock(side_effect=httpx.InvalidURL("not a url"))
+    with pytest.raises(CharlotteConfigError, match="Invalid URL"):
+        await _fetcher().fetch(f"{_BASE}/", visited_urls=set())
+
+
+@respx.mock
+async def test_protocol_error_raises_network_error():
+    # httpx.ProtocolError is a RequestError but not a NetworkError or TimeoutError —
+    # it must fall through to the RequestError fallback handler.
+    respx.get(f"{_BASE}/").mock(side_effect=httpx.ProtocolError("bad protocol"))
+    with pytest.raises(CharlotteNetworkError, match="Request failed"):
+        await _fetcher().fetch(f"{_BASE}/", visited_urls=set())
+
+
+@respx.mock
+async def test_decoding_error_on_response_text_raises_network_error():
+    # DecodingError raised when reading response.text (e.g. broken content-encoding)
+    # is wrapped as CharlotteNetworkError, not propagated raw.
+    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(200, content=b"ok"))
+    with patch.object(
+        httpx.Response, "text", new_callable=PropertyMock,
+        side_effect=httpx.DecodingError("corrupt encoding"),
+    ):
+        with pytest.raises(CharlotteNetworkError, match="decode"):
+            await _fetcher().fetch(f"{_BASE}/", visited_urls=set())
+
+
+@respx.mock
+async def test_invalid_redirect_destination_raises_redirect_error():
+    # If the redirect Location resolves to a URL normalize_url rejects, we get
+    # CharlotteRedirectError rather than a raw CharlotteConfigError.
+    # The first normalize_url call builds chain_seen; the second (for the
+    # redirect destination) is the one that raises.
+    respx.get(f"{_BASE}/page").mock(
+        return_value=httpx.Response(302, headers={"location": f"{_BASE}/dest"})
+    )
+    with patch("charlotte.core.fetcher.normalize_url", side_effect=[
+        "http://example.com/page",   # initial chain_seen seed — succeeds
+        CharlotteConfigError("bad"), # redirect destination normalize — raises
+    ]):
+        with pytest.raises(CharlotteRedirectError, match="not a valid URL"):
+            await _fetcher().fetch(f"{_BASE}/page", visited_urls=set())

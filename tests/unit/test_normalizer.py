@@ -5,9 +5,11 @@ Covers T-13 (fragment deduplication) and T-14 (query parameter ordering) from
 the test matrix, plus edge cases for each of the eight normalization rules.
 """
 
+from unittest.mock import patch
+
 import pytest
 
-from charlotte.core.normalizer import normalize_url
+from charlotte.core.normalizer import _normalize_path, normalize_url
 from charlotte.exceptions import CharlotteConfigError
 
 
@@ -283,3 +285,46 @@ def test_visited_set_deduplication():
     ]
     normalized = {normalize_url(v) for v in variants}
     assert len(normalized) == 1, f"Expected 1 canonical URL, got {normalized}"
+
+
+# ---------------------------------------------------------------------------
+# Coverage for defensive branches
+# ---------------------------------------------------------------------------
+
+def test_url_with_username_and_password():
+    # Exercises the username+password userinfo branch (L149 in normalizer.py)
+    result = normalize_url("http://user:pass@example.com/path")
+    assert result == "http://user:pass@example.com/path"
+
+
+def test_urlsplit_value_error_raises_config_error():
+    # Malformed IPv6 address causes urlsplit to raise ValueError
+    with pytest.raises(CharlotteConfigError):
+        normalize_url("http://[invalid/path")
+
+
+def test_normalize_path_dot_returns_root():
+    # _normalize_path(".")  — can't arise from HTTP URLs (which have a leading /)
+    # but the branch must be covered as defensive code.
+    assert _normalize_path(".") == "/"
+
+
+def test_trailing_slash_safety_net():
+    # Verifies the safety-net branch (path != "/" and path.endswith("/"))
+    # by patching _normalize_path to return a path that posixpath.normpath
+    # would normally have already cleaned.
+    with patch("charlotte.core.normalizer._normalize_path", return_value="/page/"):
+        result = normalize_url("http://example.com/page/")
+    assert result == "http://example.com/page"
+
+
+def test_urljoin_value_error_raises_config_error():
+    with patch("charlotte.core.normalizer.urljoin", side_effect=ValueError("bad")):
+        with pytest.raises(CharlotteConfigError, match="Could not resolve"):
+            normalize_url("page", base_url="http://example.com/")
+
+
+def test_urlunsplit_value_error_raises_config_error():
+    with patch("charlotte.core.normalizer.urlunsplit", side_effect=ValueError("bad")):
+        with pytest.raises(CharlotteConfigError, match="Could not reassemble"):
+            normalize_url("http://example.com/")
