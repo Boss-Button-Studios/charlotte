@@ -1,7 +1,5 @@
 """Unit tests for CharlotteConfig environment variable handling (CHAR-002)."""
 
-import pytest
-
 from charlotte.config import CharlotteConfig
 
 
