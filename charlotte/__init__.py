@@ -1,11 +1,12 @@
 """Charlotte — goal-directed web navigation agent.
 
-Published on PyPI as `charlotte-crawler`. Import the two public functions:
+Published on PyPI as ``charlotte-crawler``. All public types, exceptions, and
+streaming events are importable directly from this package:
 
-    from charlotte import crawl, find_link
+    from charlotte import CrawlResult, CharlotteError, CrawlStarted  # etc.
 
-All public types, exceptions, and streaming events are re-exported here so
-callers need only import from `charlotte`, not from internal submodules.
+``crawl()`` and ``find_link()`` — the two primary entry points — are
+implemented in CHAR-013 and CHAR-014 and will be exported here once complete.
 """
 
 __version__ = "0.1.0"
