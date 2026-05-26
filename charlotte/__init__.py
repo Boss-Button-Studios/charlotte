@@ -10,35 +10,61 @@ callers need only import from `charlotte`, not from internal submodules.
 
 __version__ = "0.1.0"
 
-# Result types
-from charlotte.models import CrawlResult, LinkResult, VisitLogEntry
-
-# Streaming event types — stable public API across minor versions
+from charlotte.exceptions import (
+    AdapterOutputError,
+    CharlotteConfigError,
+    CharlotteError,
+    CharlotteInternalError,
+    CharlotteNetworkError,
+    CharlotteRedirectError,
+    CharlotteTimeoutError,
+    RobotsError,
+)
 from charlotte.models import (
-    CrawlStarted,
-    PageFetched,
-    ModelDecision,
-    ResultFound,
-    PageSkipped,
     BudgetExhausted,
     CrawlComplete,
+    CrawlResult,
+    CrawlStarted,
+    LinkResult,
+    ModelDecision,
+    PageFetched,
+    PageSkipped,
+    ResultFound,
     StreamEvent,
+    TrustLevel,
+    VisitLogEntry,
 )
 
-# Trust level
-from charlotte.models import TrustLevel
+# crawl() and find_link() will be added here after CHAR-013 and CHAR-014.
 
-# Exceptions — callers may need to catch these
-from charlotte.exceptions import (
-    CharlotteError,
-    CharlotteConfigError,
-    CharlotteNetworkError,
-    CharlotteTimeoutError,
-    CharlotteRedirectError,
-    RobotsError,
-    AdapterOutputError,
-    CharlotteInternalError,
-)
-
-# crawl() and find_link() will be exported here after CHAR-013 and CHAR-014.
-# __all__ is deferred until those functions exist.
+__all__ = [
+    # Public functions (coming in CHAR-013/014)
+    # "crawl",
+    # "find_link",
+    # Result types
+    "CrawlResult",
+    "LinkResult",
+    "VisitLogEntry",
+    # Streaming events
+    "CrawlStarted",
+    "PageFetched",
+    "ModelDecision",
+    "ResultFound",
+    "PageSkipped",
+    "BudgetExhausted",
+    "CrawlComplete",
+    "StreamEvent",
+    # Trust level
+    "TrustLevel",
+    # Exceptions
+    "CharlotteError",
+    "CharlotteConfigError",
+    "CharlotteNetworkError",
+    "CharlotteTimeoutError",
+    "CharlotteRedirectError",
+    "RobotsError",
+    "AdapterOutputError",
+    "CharlotteInternalError",
+    # Version
+    "__version__",
+]
