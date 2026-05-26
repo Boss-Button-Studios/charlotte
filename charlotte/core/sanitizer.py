@@ -14,6 +14,8 @@ import re
 
 from bs4 import BeautifulSoup, Comment
 
+from charlotte.exceptions import CharlotteInternalError
+
 # Zero-width and invisible Unicode characters used to embed hidden injection text.
 # Adjacent string literals let each range carry an inline comment.
 #   U+00AD           soft hyphen
@@ -53,11 +55,11 @@ def _is_hidden(tag) -> bool:
         return True
     if "visibility:hidden" in style:
         return True
-    # opacity:0 but not opacity:0.5, opacity:0.1, etc.
-    if re.search(r"opacity:0(?!\.\d)", style):
+    # opacity:0 or 0.000... — not opacity:0.5, opacity:0.1, etc.
+    if re.search(r"opacity:0(?:\.0+)?(?:;|$|!important)", style):
         return True
-    # font-size:0 with any unit (px, em, rem, pt, %) or bare, but not 0.5em etc.
-    if re.search(r"font-size:0(?:[a-z%]|;|$)", style):
+    # font-size:0 or 0.000... with any unit or bare — not 0.5em etc.
+    if re.search(r"font-size:0(?:\.0+)?(?:[a-z%]|;|$)", style):
         return True
     # Off-screen: position:absolute combined with left or top offset <= -1000.
     if "position:absolute" in style and re.search(r"(?:left|top):-\d{4,}", style):
@@ -93,29 +95,37 @@ def strip_hidden(html: str) -> str:
     Returns:
         Sanitized HTML string with all hidden content removed.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "html.parser")
 
-    for tag in soup.find_all(["script", "style"]):
-        tag.decompose()
-
-    for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
-        node.extract()
-
-    # Strip meta content fields -- they can carry instruction-like text that is
-    # invisible to the human reader but present in the DOM.
-    for meta in soup.find_all("meta"):
-        meta.attrs.pop("content", None)
-
-    # Collect hidden elements before decomposing to avoid mutating the tree
-    # mid-iteration. Tags already removed via a parent decomposition are skipped
-    # via the parent-is-None guard.
-    for tag in soup.find_all(True):
-        if tag.parent is not None and _is_hidden(tag):
+        for tag in soup.find_all(["script", "style"]):
             tag.decompose()
 
-    for text_node in soup.find_all(string=True):
-        cleaned = _strip_invisible(str(text_node))
-        if cleaned != str(text_node):
-            text_node.replace_with(cleaned)
+        for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
+            node.extract()
 
-    return str(soup)
+        # Strip meta content fields -- they can carry instruction-like text that is
+        # invisible to the human reader but present in the DOM.
+        for meta in soup.find_all("meta"):
+            meta.attrs.pop("content", None)
+
+        # Collect hidden elements before decomposing to avoid mutating the tree
+        # mid-iteration. Tags already removed via a parent decomposition are skipped
+        # via the parent-is-None guard.
+        for tag in soup.find_all(True):
+            if tag.parent is not None and _is_hidden(tag):
+                tag.decompose()
+
+        for text_node in soup.find_all(string=True):
+            cleaned = _strip_invisible(str(text_node))
+            if cleaned != str(text_node):
+                text_node.replace_with(cleaned)
+
+        return str(soup)
+    except CharlotteInternalError:
+        raise
+    except Exception as exc:
+        raise CharlotteInternalError(
+            f"HTML sanitization failed — please report this at "
+            f"https://github.com/Boss-Button-Studios/charlotte/issues: {exc}"
+        ) from exc

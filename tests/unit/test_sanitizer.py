@@ -5,7 +5,12 @@ Covers T-23 (hidden injection text) from the test matrix, plus individual
 tests for each stripping rule defined in spec section 9.1.
 """
 
+from unittest.mock import patch
+
+import pytest
+
 from charlotte.core.sanitizer import strip_hidden
+from charlotte.exceptions import CharlotteInternalError
 
 
 # ---------------------------------------------------------------------------
@@ -361,3 +366,51 @@ def test_t23_hidden_injection_text_stripped():
     # Legitimate content preserved
     assert "Product Page" in result
     assert "Buy our widgets" in result
+
+
+# ---------------------------------------------------------------------------
+# Decimal-form hidden values — bypass regression (CodeRabbit review)
+# ---------------------------------------------------------------------------
+
+def test_opacity_zero_decimal_removes_element():
+    # opacity:0.0 is semantically zero — must be stripped
+    result = strip_hidden('<div style="opacity:0.0">Invisible</div><div>Visible</div>')
+    assert "Invisible" not in result
+    assert "Visible" in result
+
+
+def test_opacity_zero_many_decimals_removes_element():
+    result = strip_hidden('<div style="opacity:0.000">Invisible</div><div>Visible</div>')
+    assert "Invisible" not in result
+
+
+def test_opacity_nonzero_decimal_preserved():
+    result = strip_hidden('<div style="opacity:0.01">Faint</div>')
+    assert "Faint" in result
+
+
+def test_font_size_zero_decimal_removes_element():
+    # font-size:0.0px is semantically zero — must be stripped
+    result = strip_hidden('<span style="font-size:0.0px">Tiny</span><span>Normal</span>')
+    assert "Tiny" not in result
+    assert "Normal" in result
+
+
+def test_font_size_zero_many_decimals_removes_element():
+    result = strip_hidden('<span style="font-size:0.00em">Tiny</span><span>Normal</span>')
+    assert "Tiny" not in result
+
+
+def test_font_size_nonzero_decimal_preserved():
+    result = strip_hidden('<span style="font-size:0.5em">Small</span>')
+    assert "Small" in result
+
+
+# ---------------------------------------------------------------------------
+# Parser exception boundary — CharlotteInternalError
+# ---------------------------------------------------------------------------
+
+def test_parser_exception_raises_internal_error():
+    with patch("charlotte.core.sanitizer.BeautifulSoup", side_effect=RuntimeError("parser crash")):
+        with pytest.raises(CharlotteInternalError, match="sanitization failed"):
+            strip_hidden("<p>Hello</p>")
