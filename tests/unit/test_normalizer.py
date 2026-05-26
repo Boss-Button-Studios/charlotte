@@ -8,6 +8,7 @@ the test matrix, plus edge cases for each of the eight normalization rules.
 import pytest
 
 from charlotte.core.normalizer import normalize_url
+from charlotte.exceptions import CharlotteConfigError
 
 
 # ---------------------------------------------------------------------------
@@ -81,12 +82,12 @@ def test_absolute_url_unaffected_by_base():
 
 
 def test_relative_url_without_base_raises():
-    with pytest.raises(ValueError, match="no scheme"):
+    with pytest.raises(CharlotteConfigError, match="no scheme"):
         normalize_url("relative/path")
 
 
 def test_empty_url_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(CharlotteConfigError):
         normalize_url("")
 
 
@@ -232,6 +233,12 @@ def test_empty_query_string_dropped():
     # A bare ? with no params should not appear in the output
     result = normalize_url("http://example.com/page?")
     assert result == "http://example.com/page"
+
+
+def test_duplicate_keys_stable_sort():
+    # Duplicate keys are sorted by key; relative order within each key is preserved
+    result = normalize_url("http://example.com/?b=2&a=1&b=3&a=4")
+    assert result == "http://example.com/?a=1&a=4&b=2&b=3"
 
 
 # ---------------------------------------------------------------------------

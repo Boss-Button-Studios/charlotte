@@ -21,6 +21,8 @@ from urllib.parse import (
     urlunsplit,
 )
 
+from charlotte.exceptions import CharlotteConfigError
+
 # RFC 3986 §2.3 — characters that are never percent-encoded in a well-formed URL.
 # Decoding percent-encoded sequences for these characters produces a canonical form.
 _UNRESERVED: frozenset[str] = frozenset(
@@ -73,8 +75,8 @@ def _normalize_path(path: str) -> str:
 def _sort_query(query: str) -> str:
     """Sort query parameters alphabetically by key for canonical comparison.
 
-    Uses standard percent-encoding (%20, not +) on re-encoding, which is
-    consistent with RFC 3986. Sort is stable so equal keys preserve order.
+    Uses standard percent-encoding (%20, not +) on re-encoding, consistent
+    with RFC 3986. Sort is stable so duplicate keys preserve relative order.
     """
     if not query:
         return ""
@@ -94,7 +96,8 @@ def normalize_url(url: str, base_url: str | None = None) -> str:
     4. Decode percent-encoded unreserved characters (e.g. %41 -> A)
     5. Strip URL fragment (#section)
     6. Normalize path: collapse // and resolve . / .. segments
-    7. Sort query parameters alphabetically by key
+    7. Sort query parameters alphabetically by key (stable — duplicate keys
+       preserve their relative order)
     8. Remove trailing slash from non-root paths
 
     Note: result URLs returned to callers are intentionally NOT normalized --
@@ -108,19 +111,28 @@ def normalize_url(url: str, base_url: str | None = None) -> str:
         Normalized absolute URL string.
 
     Raises:
-        ValueError: If the URL is empty, or is relative and base_url is None.
+        CharlotteConfigError: If the URL is empty, unparseable, or is relative
+                              with no base_url provided to resolve it.
     """
     if not url:
-        raise ValueError("URL must not be empty")
+        raise CharlotteConfigError("URL must not be empty")
 
     # Rule 3: resolve relative URLs before any other parsing
     if base_url:
-        url = urljoin(base_url, url)
+        try:
+            url = urljoin(base_url, url)
+        except ValueError as exc:
+            raise CharlotteConfigError(
+                f"Could not resolve {url!r} against base {base_url!r}: {exc}"
+            ) from exc
 
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise CharlotteConfigError(f"Could not parse URL {url!r}: {exc}") from exc
 
     if not parsed.scheme:
-        raise ValueError(
+        raise CharlotteConfigError(
             f"URL has no scheme and no base_url was provided to resolve it: {url!r}"
         )
 
@@ -162,4 +174,9 @@ def normalize_url(url: str, base_url: str | None = None) -> str:
     if path != "/" and path.endswith("/"):
         path = path.rstrip("/")
 
-    return urlunsplit((scheme, netloc, path, query, ""))
+    try:
+        return urlunsplit((scheme, netloc, path, query, ""))
+    except ValueError as exc:
+        raise CharlotteConfigError(
+            f"Could not reassemble normalized URL from {url!r}: {exc}"
+        ) from exc
