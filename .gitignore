@@ -167,5 +167,5 @@ Thumbs.db
 playwright/.auth/
 
 #manual adds
-workflows/
+/workflows/
 .claude/
