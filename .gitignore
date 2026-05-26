@@ -166,6 +166,6 @@ Thumbs.db
 # Playwright browser binaries
 playwright/.auth/
 
-#manual adds
+# manual adds
 /workflows/
 .claude/

@@ -125,11 +125,21 @@ class PageFetcher:
                     raise CharlotteNetworkError(
                         f"Network error fetching {current_url!r}: {exc}"
                     ) from exc
+                except httpx.RequestError as exc:
+                    raise CharlotteNetworkError(
+                        f"Request failed for {current_url!r}: {exc}"
+                    ) from exc
 
                 if not response.is_redirect:
+                    try:
+                        html = response.text
+                    except httpx.DecodingError as exc:
+                        raise CharlotteNetworkError(
+                            f"Failed to decode response from {current_url!r}: {exc}"
+                        ) from exc
                     return FetchResult(
                         url=current_url,
-                        html=response.text,
+                        html=html,
                         status_code=response.status_code,
                         fetch_ms=int((time.monotonic() - start) * 1000),
                         redirect_chain=redirect_chain,
