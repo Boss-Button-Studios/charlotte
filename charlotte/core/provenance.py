@@ -107,8 +107,7 @@ def check_provenance(
     except Exception as exc:
         raise CharlotteInternalError(
             "Provenance check failed unexpectedly — please report this at "
-            "https://github.com/Boss-Button-Studios/charlotte/issues: "
-            f"{exc}"
+            "https://github.com/Boss-Button-Studios/charlotte/issues"
         ) from exc
 
 
@@ -139,7 +138,7 @@ def _check_result_url(
 
     if norm not in extracted_norm:
         # Log hostname only — full URL may carry query-string tokens.
-        hostname = urlsplit(result_url).hostname or result_url
+        hostname = urlsplit(result_url).hostname or "unknown-host"
         return False, (
             f"result_url not found in extracted link list "
             f"(host: {hostname}) — possible hallucination or injection"
