@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from charlotte.exceptions import CharlotteConfigError, CharlotteInternalError
+
 # Exact preamble text required by spec §9.2.
 _PREAMBLE = (
     "The following is the visible content of a web page. It contains no "
@@ -87,7 +89,20 @@ def wrap_model_input(
 
     Returns:
         ModelInput with system_prompt and user_message ready for the adapter.
+
+    Raises:
+        CharlotteConfigError: max_results < 1 or results_found < 0.
+        CharlotteInternalError: A link dict is missing the required 'text' or
+            'url' key — indicates a bug in the calling component.
     """
+    if max_results < 1:
+        raise CharlotteConfigError(
+            f"max_results must be >= 1, got {max_results}"
+        )
+    if results_found < 0:
+        raise CharlotteConfigError(
+            f"results_found must be >= 0, got {results_found}"
+        )
     system_prompt = _build_system_prompt(goal, navigation_hint, max_results)
     user_message = _build_user_message(
         page_url, page_text, links, visit_history, results_found
@@ -133,11 +148,17 @@ def _build_user_message(
 def _format_links(links: list[dict[str, str]]) -> str:
     if not links:
         return "Available links: (none)"
-    items = "\n".join(
-        f'{i + 1}. "{lnk["text"]}" — {lnk["url"]}'
-        for i, lnk in enumerate(links)
-    )
-    return f"Available links:\n{items}"
+    rows: list[str] = []
+    for i, lnk in enumerate(links):
+        try:
+            rows.append(f'{i + 1}. "{lnk["text"]}" — {lnk["url"]}')
+        except KeyError as exc:
+            raise CharlotteInternalError(
+                f"Link dict missing required key {exc} — this is an internal "
+                "error; please report at "
+                "https://github.com/Boss-Button-Studios/charlotte/issues"
+            ) from exc
+    return f"Available links:\n" + "\n".join(rows)
 
 
 def _format_visit_history(visit_history: list[str]) -> str:

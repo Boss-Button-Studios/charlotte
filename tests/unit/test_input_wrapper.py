@@ -9,6 +9,7 @@ optional parameters (navigation_hint, max_results, results_found).
 import pytest
 
 from charlotte.core.input_wrapper import ModelInput, wrap_model_input
+from charlotte.exceptions import CharlotteConfigError, CharlotteInternalError
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -260,3 +261,39 @@ def test_results_found_zero_by_default():
     """The default results_found is 0 and appears in the user message."""
     mi = wrap_model_input(_GOAL, _URL, _TEXT, _LINKS, _HISTORY)
     assert "0" in mi.user_message
+
+
+# ---------------------------------------------------------------------------
+# Failure modes — invalid inputs
+# ---------------------------------------------------------------------------
+
+def test_max_results_zero_raises_config_error():
+    """max_results=0 is invalid (must be >= 1) and raises CharlotteConfigError."""
+    with pytest.raises(CharlotteConfigError):
+        wrap_model_input(_GOAL, _URL, _TEXT, _LINKS, _HISTORY, max_results=0)
+
+
+def test_negative_max_results_raises_config_error():
+    """Negative max_results is invalid and raises CharlotteConfigError."""
+    with pytest.raises(CharlotteConfigError):
+        wrap_model_input(_GOAL, _URL, _TEXT, _LINKS, _HISTORY, max_results=-5)
+
+
+def test_negative_results_found_raises_config_error():
+    """Negative results_found is invalid and raises CharlotteConfigError."""
+    with pytest.raises(CharlotteConfigError):
+        wrap_model_input(_GOAL, _URL, _TEXT, _LINKS, _HISTORY, results_found=-1)
+
+
+def test_malformed_link_missing_url_raises_internal_error():
+    """A link dict without the 'url' key raises CharlotteInternalError."""
+    bad_links = [{"text": "About"}]
+    with pytest.raises(CharlotteInternalError):
+        wrap_model_input(_GOAL, _URL, _TEXT, bad_links, _HISTORY)
+
+
+def test_malformed_link_missing_text_raises_internal_error():
+    """A link dict without the 'text' key raises CharlotteInternalError."""
+    bad_links = [{"url": "https://example.com/about"}]
+    with pytest.raises(CharlotteInternalError):
+        wrap_model_input(_GOAL, _URL, _TEXT, bad_links, _HISTORY)
