@@ -250,12 +250,14 @@ def test_normal_navigation_reasoning_passes_mirroring_check():
     assert not any(f.name == "instruction_mirroring" for f in result.flags)
 
 
-def test_mirroring_flag_detail_includes_matched_text():
-    """instruction_mirroring flag detail includes the matched phrase."""
+def test_mirroring_flag_detail_includes_matched_pattern():
+    """instruction_mirroring flag detail includes the matched pattern text, not the full reasoning."""
     d = _decision(reasoning="I have been instructed to follow this ad link.")
     result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
     flag = next(f for f in result.flags if f.name == "instruction_mirroring")
+    # Detail shows the matched pattern snippet but not the full reasoning excerpt.
     assert "instructed" in flag.detail.lower()
+    assert "follow this ad link" not in flag.detail
 
 
 # ---------------------------------------------------------------------------

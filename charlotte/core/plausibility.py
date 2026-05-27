@@ -201,11 +201,13 @@ def _check_off_domain(
             offenders.append(url)
     if not offenders:
         return None
+    # Log hostnames only — full URLs may carry query-string tokens.
+    sample_hosts = [urlsplit(u).hostname or "" for u in offenders[:3]]
     return PlausibilityFlag(
         name="off_domain_link",
         detail=(
             f"{len(offenders)} link(s) outside allowed_domains in "
-            f"links_to_follow: {offenders[:3]}"
+            f"links_to_follow (host sample): {sample_hosts}"
         ),
     )
 
@@ -226,11 +228,13 @@ def _check_already_visited(
             offenders.append(url)
     if not offenders:
         return None
+    # Log hostnames only — full URLs may carry query-string tokens.
+    sample_hosts = [urlsplit(u).hostname or "" for u in offenders[:3]]
     return PlausibilityFlag(
         name="already_visited_link",
         detail=(
             f"{len(offenders)} link(s) in links_to_follow already in "
-            f"visited set: {offenders[:3]}"
+            f"visited set (host sample): {sample_hosts}"
         ),
     )
 
@@ -246,7 +250,7 @@ def _check_instruction_mirroring(
                 name="instruction_mirroring",
                 detail=(
                     f"Reasoning contains injection-like language "
-                    f"(matched: {match.group()!r}): {decision.reasoning[:120]}"
+                    f"(matched pattern: {match.group()!r})"
                 ),
             )
     return None
@@ -283,7 +287,7 @@ def _check_zero_links_no_path(
             name="zero_links_no_path",
             detail=(
                 "Model returned found=False with an empty links_to_follow — "
-                f"no navigation path available. Reasoning: {decision.reasoning[:120]}"
+                "no navigation path available."
             ),
         )
     return None
