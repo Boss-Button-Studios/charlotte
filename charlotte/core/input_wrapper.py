@@ -158,7 +158,7 @@ def _format_links(links: list[dict[str, str]]) -> str:
                 "error; please report at "
                 "https://github.com/Boss-Button-Studios/charlotte/issues"
             ) from exc
-    return f"Available links:\n" + "\n".join(rows)
+    return "Available links:\n" + "\n".join(rows)
 
 
 def _format_visit_history(visit_history: list[str]) -> str:
