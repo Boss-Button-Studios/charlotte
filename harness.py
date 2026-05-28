@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 
 from charlotte.adapters.local import LocalAdapter
 from charlotte.core.engine import call_with_validation
-from charlotte.core.extractor import ExtractResult, extract
+from charlotte.core.extractor import ExtractedPage, extract
 from charlotte.core.fetcher import FetchResult, PageFetcher
 from charlotte.core.robots import RobotsHandler
 from charlotte.core.sanitizer import strip_hidden
@@ -109,11 +109,11 @@ def step_sanitize(html: str) -> tuple[dict, str]:
     return entry, clean
 
 
-def step_extract(clean_html: str, page_url: str, hostname: str) -> tuple[dict, ExtractResult]:
+def step_extract(clean_html: str, page_url: str, hostname: str) -> tuple[dict, ExtractedPage]:
     """Extract text and links from sanitized HTML.
 
     Returns:
-        (log_entry, ExtractResult)
+        (log_entry, ExtractedPage)
     """
     t0 = monotonic()
     result = extract(clean_html, page_url=page_url, allowed_domains={hostname})
@@ -133,7 +133,7 @@ async def step_model(
     adapter: LocalAdapter,
     goal: str,
     page_url: str,
-    extracted: ExtractResult,
+    extracted: ExtractedPage,
 ) -> tuple[dict, object]:
     """Call the local model and validate the response.
 
