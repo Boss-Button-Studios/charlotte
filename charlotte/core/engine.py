@@ -308,7 +308,12 @@ def crawl(
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     _domains: frozenset[str]
     if allowed_domains is None:
-        _domains = frozenset({start_hostname})
+        # Auto-include the www./non-www counterpart so that apex→www (or www→apex)
+        # redirects on the start URL don't immediately raise CharlotteRedirectError.
+        if start_hostname.startswith("www."):
+            _domains = frozenset({start_hostname, start_hostname[4:]})
+        else:
+            _domains = frozenset({start_hostname, f"www.{start_hostname}"})
     else:
         _domains = frozenset(d.lower() for d in allowed_domains)
 

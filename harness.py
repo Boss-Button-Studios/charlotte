@@ -63,13 +63,13 @@ async def step_robots(url: str, default_delay: float) -> tuple[dict, float]:
     return entry, crawl_delay
 
 
-async def step_fetch(url: str, hostname: str, polite_delay: float) -> tuple[dict, FetchResult]:
+async def step_fetch(url: str, allowed_domains: set[str], polite_delay: float) -> tuple[dict, FetchResult]:
     """Fetch the page at *url*.
 
     Returns:
         (log_entry, FetchResult)
     """
-    fetcher = PageFetcher(allowed_domains={hostname}, polite_delay=polite_delay)
+    fetcher = PageFetcher(allowed_domains=allowed_domains, polite_delay=polite_delay)
     page = await fetcher.fetch(url, visited_urls=set())
     entry = {
         "status_code": page.status_code,
@@ -178,7 +178,9 @@ def write_log(log: dict, hostname: str) -> Path:
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    hostname = urlsplit(URL).hostname or ""
+    base_hostname = urlsplit(URL).hostname or ""
+    www_counterpart = base_hostname[4:] if base_hostname.startswith("www.") else f"www.{base_hostname}"
+    allowed_domains = {base_hostname, www_counterpart}
     adapter = LocalAdapter()
 
     print(f"URL:    {URL}")
@@ -201,14 +203,15 @@ async def main() -> None:
     except RobotsError as exc:
         log["steps"]["robots"] = {"allowed": False, "reason": str(exc)}
         print(f"  BLOCKED: {exc}")
-        write_log(log, hostname)
+        write_log(log, base_hostname)
         return
     print()
 
     try:
         # 2 — Fetch
         print("── fetch ───────────────────────────────")
-        log["steps"]["fetch"], page = await step_fetch(URL, hostname, crawl_delay)
+        log["steps"]["fetch"], page = await step_fetch(URL, allowed_domains, crawl_delay)
+        final_hostname = urlsplit(page.url).hostname or base_hostname
         print()
 
         # 3 — Sanitize
@@ -218,7 +221,7 @@ async def main() -> None:
 
         # 4 — Extract
         print("── extract ─────────────────────────────")
-        log["steps"]["extract"], extracted = step_extract(clean_html, page.url, hostname)
+        log["steps"]["extract"], extracted = step_extract(clean_html, page.url, final_hostname)
         print()
 
         # 5 — Model
@@ -231,7 +234,7 @@ async def main() -> None:
         print(f"  Pipeline failed: {type(exc).__name__}")
 
     finally:
-        path = write_log(log, hostname)
+        path = write_log(log, base_hostname)
         print(f"Log written → {path}")
 
 

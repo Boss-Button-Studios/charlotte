@@ -39,7 +39,10 @@ GOAL = sys.argv[2] if len(sys.argv) > 2 else "Find a story about AI"
 
 async def main() -> None:
     from urllib.parse import urlsplit
-    hostname = urlsplit(URL).hostname or ""
+    base_hostname = urlsplit(URL).hostname or ""
+    # Include www./non-www counterpart so apex→www (or www→apex) redirects are followed.
+    www_counterpart = base_hostname[4:] if base_hostname.startswith("www.") else f"www.{base_hostname}"
+    allowed = {base_hostname, www_counterpart}
 
     adapter = LocalAdapter()
 
@@ -50,15 +53,16 @@ async def main() -> None:
 
     # 1 — Fetch
     print("Fetching page...")
-    fetcher = PageFetcher(allowed_domains={hostname}, polite_delay=0.0)
+    fetcher = PageFetcher(allowed_domains=allowed, polite_delay=0.0)
     page = await fetcher.fetch(URL, visited_urls=set())
+    hostname = urlsplit(page.url).hostname or base_hostname  # follow redirects
     print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)")
 
     # 2 — Sanitize (Layer 1: strip hidden content)
     clean_html = strip_hidden(page.html)
 
     # 3 — Extract text and links
-    extracted = extract(clean_html, page_url=page.url, allowed_domains={hostname})
+    extracted = extract(clean_html, page_url=page.url, allowed_domains=allowed)
     print(f"  Extracted {len(extracted.text):,} chars of text, {len(extracted.links)} links")
     print()
 
