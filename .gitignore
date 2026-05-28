@@ -169,3 +169,4 @@ playwright/.auth/
 # manual adds
 /workflows/
 .claude/
+harness_logs/
