@@ -136,6 +136,18 @@ def test_non_http_scheme_raises_config_error():
         LocalAdapter(base_url="ftp://localhost:11434")
 
 
+def test_http_scheme_only_no_host_raises_config_error():
+    """http:// with no hostname raises CharlotteConfigError."""
+    with pytest.raises(CharlotteConfigError):
+        LocalAdapter(base_url="http://")
+
+
+def test_https_scheme_only_no_host_raises_config_error():
+    """https:// with no hostname raises CharlotteConfigError."""
+    with pytest.raises(CharlotteConfigError):
+        LocalAdapter(base_url="https://")
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
@@ -236,6 +248,36 @@ async def test_available_links_in_user_prompt():
     user_content = json.loads(route.calls[0].request.content)["messages"][1]["content"]
     assert "Contact" in user_content
     assert "https://example.com/contact" in user_content
+
+
+@respx.mock
+async def test_page_summary_wrapped_in_page_content_tags():
+    """page_summary is enclosed in <page_content> delimiters."""
+    route = respx.post(_ENDPOINT).mock(return_value=_ok_response())
+    await LocalAdapter()(**_PAGE_CONTEXT)
+    user_content = json.loads(route.calls[0].request.content)["messages"][1]["content"]
+    assert "<page_content>" in user_content
+    assert "</page_content>" in user_content
+
+
+@respx.mock
+async def test_available_links_wrapped_in_tags():
+    """available_links section is enclosed in <available_links> delimiters."""
+    route = respx.post(_ENDPOINT).mock(return_value=_ok_response())
+    await LocalAdapter()(**_PAGE_CONTEXT)
+    user_content = json.loads(route.calls[0].request.content)["messages"][1]["content"]
+    assert "<available_links>" in user_content
+    assert "</available_links>" in user_content
+
+
+@respx.mock
+async def test_visit_history_wrapped_in_tags():
+    """visit_history section is enclosed in <visit_history> delimiters."""
+    route = respx.post(_ENDPOINT).mock(return_value=_ok_response())
+    await LocalAdapter()(**_PAGE_CONTEXT)
+    user_content = json.loads(route.calls[0].request.content)["messages"][1]["content"]
+    assert "<visit_history>" in user_content
+    assert "</visit_history>" in user_content
 
 
 @respx.mock
