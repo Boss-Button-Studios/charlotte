@@ -163,6 +163,22 @@ async def test_redirect_to_previously_visited_url_raises():
         await _fetcher().fetch(f"{_BASE}/new", visited_urls=visited)
 
 
+@respx.mock
+async def test_trailing_slash_canonical_redirect_not_loop():
+    """Server-side /path → /path/ redirect must not be detected as a loop."""
+    respx.get(f"{_BASE}/docs").mock(
+        return_value=httpx.Response(301, headers={"location": f"{_BASE}/docs/"})
+    )
+    respx.get(f"{_BASE}/docs/").mock(
+        return_value=httpx.Response(200, text="<html><body>docs</body></html>")
+    )
+
+    fetcher = _fetcher(allowed_domains={"example.com"})
+    result = await fetcher.fetch(f"{_BASE}/docs", visited_urls=set())
+    assert result.url == f"{_BASE}/docs/"
+    assert result.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # T-18: Redirect chain exceeding 5 hops — CharlotteRedirectError
 # ---------------------------------------------------------------------------
@@ -294,7 +310,6 @@ async def test_invalid_redirect_destination_raises_redirect_error():
         return_value=httpx.Response(302, headers={"location": f"{_BASE}/dest"})
     )
     with patch("charlotte.core.fetcher.normalize_url", side_effect=[
-        "http://example.com/page",   # initial chain_seen seed — succeeds
         CharlotteConfigError("bad"), # redirect destination normalize — raises
     ]):
         with pytest.raises(CharlotteRedirectError, match="not a valid URL"):

@@ -245,7 +245,9 @@ async def _crawl_core(
 
         # Fetch
         try:
-            page = await fetcher.fetch(url, visited_urls=visited)
+            # Exclude the current URL from visited so its own canonical redirect
+            # (e.g. /path → /path/) is not mistaken for a cross-crawl revisit.
+            page = await fetcher.fetch(url, visited_urls=visited - {norm})
         except CharlotteTimeoutError as exc:
             yield PageSkipped(url=url, reason=str(exc), error_type="CharlotteTimeoutError")
             continue

@@ -101,7 +101,9 @@ class PageFetcher:
             pool=None,
         )
         redirect_chain: list[tuple[int, str]] = []
-        chain_seen: set[str] = {normalize_url(url)}
+        # Raw (un-normalized) URLs — keeps /path and /path/ distinct so a
+        # server-side trailing-slash canonicalization isn't mistaken for a loop.
+        chain_seen: set[str] = {url}
         current_url = url
         start = time.monotonic()
 
@@ -168,10 +170,10 @@ class PageFetcher:
                         f"Redirect destination {destination!r} is not a valid URL: {exc}"
                     ) from exc
 
-                if norm_dest in chain_seen or norm_dest in visited_urls:
+                if destination in chain_seen or norm_dest in visited_urls:
                     raise CharlotteRedirectError(
                         f"Redirect loop detected: {destination!r} already visited"
                     )
 
-                chain_seen.add(norm_dest)
+                chain_seen.add(destination)
                 current_url = destination
