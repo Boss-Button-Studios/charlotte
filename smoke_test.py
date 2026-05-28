@@ -26,6 +26,7 @@ hardware. Warm it up first if Ollama has just started:
 import asyncio
 import sys
 import textwrap
+from time import monotonic
 
 from charlotte.adapters.local import LocalAdapter
 from charlotte.core.engine import call_with_validation
@@ -54,9 +55,10 @@ async def main() -> None:
     # 1 — Fetch
     print("Fetching page...")
     fetcher = PageFetcher(allowed_domains=allowed, polite_delay=0.0)
+    t0 = monotonic()
     page = await fetcher.fetch(URL, visited_urls=set())
     hostname = urlsplit(page.url).hostname or base_hostname  # follow redirects
-    print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)")
+    print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)  [{monotonic()-t0:.1f}s]")
 
     # 2 — Sanitize (Layer 1: strip hidden content)
     clean_html = strip_hidden(page.html)
@@ -69,6 +71,7 @@ async def main() -> None:
     # 4 — Call LocalAdapter (with validation + one retry on schema failure)
     print("Calling local model...")
     from charlotte.exceptions import AdapterOutputError
+    t0 = monotonic()
     try:
         result = await call_with_validation(
             adapter,
@@ -90,7 +93,7 @@ async def main() -> None:
         return
 
     # 5 — Print decision
-    print("Model decision:")
+    print(f"Model decision:  [{monotonic()-t0:.1f}s]")
     print(f"  found:      {result.found}")
     print(f"  confidence: {result.confidence:.2f}")
     print(f"  result_url: {result.result_url}")

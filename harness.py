@@ -27,6 +27,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from urllib.parse import urlsplit
 
 from charlotte.adapters.local import LocalAdapter
@@ -57,9 +58,11 @@ async def step_robots(url: str, default_delay: float) -> tuple[dict, float]:
         RobotsError: URL is blocked by robots.txt or robots.txt is unreachable.
     """
     handler = RobotsHandler()
+    t0 = monotonic()
     crawl_delay = await handler.check(url, default_delay)
-    entry = {"allowed": True, "crawl_delay": crawl_delay}
-    print(f"  Allowed  (crawl_delay={crawl_delay}s)")
+    elapsed_ms = int((monotonic() - t0) * 1000)
+    entry = {"allowed": True, "crawl_delay": crawl_delay, "elapsed_ms": elapsed_ms}
+    print(f"  Allowed  (crawl_delay={crawl_delay}s)  [{elapsed_ms}ms]")
     return entry, crawl_delay
 
 
@@ -77,7 +80,7 @@ async def step_fetch(url: str, allowed_domains: set[str], polite_delay: float) -
         "fetch_ms": page.fetch_ms,
         "redirect_chain": page.redirect_chain,
     }
-    print(f"  HTTP {page.status_code}  ({len(page.html):,} chars,  {page.fetch_ms} ms)")
+    print(f"  HTTP {page.status_code}  ({len(page.html):,} chars,  {page.fetch_ms}ms)")
     if page.redirect_chain:
         for status, dest in page.redirect_chain:
             print(f"    → {status} {dest}")
@@ -90,7 +93,9 @@ def step_sanitize(html: str) -> tuple[dict, str]:
     Returns:
         (log_entry, clean_html)
     """
+    t0 = monotonic()
     clean = strip_hidden(html)
+    elapsed_ms = int((monotonic() - t0) * 1000)
     before = len(html)
     after = len(clean)
     reduction = (before - after) / before * 100 if before else 0.0
@@ -98,8 +103,9 @@ def step_sanitize(html: str) -> tuple[dict, str]:
         "html_before_chars": before,
         "html_after_chars": after,
         "reduction_pct": round(reduction, 1),
+        "elapsed_ms": elapsed_ms,
     }
-    print(f"  {before:,} → {after:,} chars  ({reduction:.1f}% stripped)")
+    print(f"  {before:,} → {after:,} chars  ({reduction:.1f}% stripped)  [{elapsed_ms}ms]")
     return entry, clean
 
 
@@ -109,14 +115,17 @@ def step_extract(clean_html: str, page_url: str, hostname: str) -> tuple[dict, E
     Returns:
         (log_entry, ExtractResult)
     """
+    t0 = monotonic()
     result = extract(clean_html, page_url=page_url, allowed_domains={hostname})
+    elapsed_ms = int((monotonic() - t0) * 1000)
     entry = {
         "text_chars": len(result.text),
         "link_count": len(result.links),
+        "elapsed_ms": elapsed_ms,
         "text": result.text,
         "link_urls": [link["url"] for link in result.links],
     }
-    print(f"  {len(result.text):,} chars text,  {len(result.links)} links")
+    print(f"  {len(result.text):,} chars text,  {len(result.links)} links  [{elapsed_ms}ms]")
     return entry, result
 
 
@@ -131,6 +140,7 @@ async def step_model(
     Returns:
         (log_entry, NavResult)
     """
+    t0 = monotonic()
     nav = await call_with_validation(
         adapter,
         goal=goal,
@@ -142,14 +152,16 @@ async def step_model(
         visit_history=[],
         results_so_far=0,
     )
+    elapsed_ms = int((monotonic() - t0) * 1000)
     entry = {
         "found": nav.found,
         "confidence": nav.confidence,
         "result_url": nav.result_url,
         "links_to_follow": nav.links_to_follow,
         "reasoning": nav.reasoning,
+        "elapsed_ms": elapsed_ms,
     }
-    print(f"  found:      {nav.found}")
+    print(f"  found:      {nav.found}  [{elapsed_ms}ms]")
     print(f"  confidence: {nav.confidence:.2f}")
     print(f"  result_url: {nav.result_url}")
     print(f"  reasoning:  {textwrap.shorten(nav.reasoning, width=120)}")
