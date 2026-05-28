@@ -29,7 +29,7 @@ import textwrap
 from time import monotonic
 
 from charlotte.adapters.local import LocalAdapter
-from charlotte.core.engine import call_with_validation
+from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher
 from charlotte.core.sanitizer import strip_hidden

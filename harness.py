@@ -31,7 +31,7 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 from charlotte.adapters.local import LocalAdapter
-from charlotte.core.engine import call_with_validation
+from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import ExtractedPage, extract
 from charlotte.core.fetcher import FetchResult, PageFetcher
 from charlotte.core.robots import RobotsHandler
@@ -109,14 +109,14 @@ def step_sanitize(html: str) -> tuple[dict, str]:
     return entry, clean
 
 
-def step_extract(clean_html: str, page_url: str, hostname: str) -> tuple[dict, ExtractedPage]:
+def step_extract(clean_html: str, page_url: str, allowed_domains: set[str]) -> tuple[dict, ExtractedPage]:
     """Extract text and links from sanitized HTML.
 
     Returns:
         (log_entry, ExtractedPage)
     """
     t0 = monotonic()
-    result = extract(clean_html, page_url=page_url, allowed_domains={hostname})
+    result = extract(clean_html, page_url=page_url, allowed_domains=allowed_domains)
     elapsed_ms = int((monotonic() - t0) * 1000)
     entry = {
         "text_chars": len(result.text),
@@ -223,7 +223,12 @@ async def main() -> None:
         # 2 — Fetch
         print("── fetch ───────────────────────────────")
         log["steps"]["fetch"], page = await step_fetch(URL, allowed_domains, crawl_delay)
-        final_hostname = urlsplit(page.url).hostname or base_hostname
+        final_hostname = (urlsplit(page.url).hostname or base_hostname).lower()
+        final_counterpart = (
+            final_hostname[4:] if final_hostname.startswith("www.")
+            else f"www.{final_hostname}"
+        )
+        final_allowed_domains = {final_hostname, final_counterpart}
         print()
 
         # 3 — Sanitize
@@ -233,7 +238,7 @@ async def main() -> None:
 
         # 4 — Extract
         print("── extract ─────────────────────────────")
-        log["steps"]["extract"], extracted = step_extract(clean_html, page.url, final_hostname)
+        log["steps"]["extract"], extracted = step_extract(clean_html, page.url, final_allowed_domains)
         print()
 
         # 5 — Model

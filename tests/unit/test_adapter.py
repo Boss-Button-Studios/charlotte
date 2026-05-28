@@ -16,7 +16,7 @@ import pytest
 
 from charlotte.adapters.base import AdapterProtocol
 from charlotte.adapters.groq import GroqAdapter, _build_user_prompt
-from charlotte.core.engine import (
+from charlotte.core.adapter_validation import (
     AdapterOutput,
     _SCHEMA_HINT,
     call_with_validation,
@@ -349,7 +349,7 @@ async def test_adapter_output_error_on_retry_propagated_unchanged():
 
 def test_is_valid_url_malformed_ipv6_returns_false():
     """urlparse raises ValueError on malformed IPv6 — _is_valid_url returns False."""
-    from charlotte.core.engine import _is_valid_url
+    from charlotte.core.adapter_validation import _is_valid_url
     assert _is_valid_url("http://[invalid/path") is False
 
 
