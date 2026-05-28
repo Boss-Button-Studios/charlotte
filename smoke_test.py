@@ -41,10 +41,11 @@ async def main() -> None:
     from urllib.parse import urlsplit
     hostname = urlsplit(URL).hostname or ""
 
+    adapter = LocalAdapter()
+
     print(f"URL:    {URL}")
     print(f"Goal:   {GOAL}")
-    from charlotte.adapters.local import _DEFAULT_MODEL
-    print(f"Model:  {_DEFAULT_MODEL}")
+    print(f"Model:  {adapter._model}")
     print()
 
     # 1 — Fetch
@@ -63,7 +64,6 @@ async def main() -> None:
 
     # 4 — Call LocalAdapter (with validation + one retry on schema failure)
     print("Calling local model...")
-    adapter = LocalAdapter()
     result = await call_with_validation(
         adapter,
         goal=GOAL,
