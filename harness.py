@@ -63,13 +63,13 @@ async def step_robots(url: str, default_delay: float) -> tuple[dict, float]:
     return entry, crawl_delay
 
 
-async def step_fetch(url: str, hostname: str) -> tuple[dict, FetchResult]:
+async def step_fetch(url: str, hostname: str, polite_delay: float) -> tuple[dict, FetchResult]:
     """Fetch the page at *url*.
 
     Returns:
         (log_entry, FetchResult)
     """
-    fetcher = PageFetcher(allowed_domains={hostname}, polite_delay=0.0)
+    fetcher = PageFetcher(allowed_domains={hostname}, polite_delay=polite_delay)
     page = await fetcher.fetch(url, visited_urls=set())
     entry = {
         "status_code": page.status_code,
@@ -114,7 +114,7 @@ def step_extract(clean_html: str, page_url: str, hostname: str) -> tuple[dict, E
         "text_chars": len(result.text),
         "link_count": len(result.links),
         "text": result.text,
-        "links": result.links,
+        "link_urls": [link["url"] for link in result.links],
     }
     print(f"  {len(result.text):,} chars text,  {len(result.links)} links")
     return entry, result
@@ -197,37 +197,42 @@ async def main() -> None:
     # 1 — Robots
     print("── robots ──────────────────────────────")
     try:
-        log["steps"]["robots"], _ = await step_robots(URL, default_delay=1.0)
+        log["steps"]["robots"], crawl_delay = await step_robots(URL, default_delay=1.0)
     except RobotsError as exc:
         log["steps"]["robots"] = {"allowed": False, "reason": str(exc)}
         print(f"  BLOCKED: {exc}")
-        path = write_log(log, hostname)
-        print(f"\nLog written → {path}")
+        write_log(log, hostname)
         return
     print()
 
-    # 2 — Fetch
-    print("── fetch ───────────────────────────────")
-    log["steps"]["fetch"], page = await step_fetch(URL, hostname)
-    print()
+    try:
+        # 2 — Fetch
+        print("── fetch ───────────────────────────────")
+        log["steps"]["fetch"], page = await step_fetch(URL, hostname, crawl_delay)
+        print()
 
-    # 3 — Sanitize
-    print("── sanitize ────────────────────────────")
-    log["steps"]["sanitize"], clean_html = step_sanitize(page.html)
-    print()
+        # 3 — Sanitize
+        print("── sanitize ────────────────────────────")
+        log["steps"]["sanitize"], clean_html = step_sanitize(page.html)
+        print()
 
-    # 4 — Extract
-    print("── extract ─────────────────────────────")
-    log["steps"]["extract"], extracted = step_extract(clean_html, page.url, hostname)
-    print()
+        # 4 — Extract
+        print("── extract ─────────────────────────────")
+        log["steps"]["extract"], extracted = step_extract(clean_html, page.url, hostname)
+        print()
 
-    # 5 — Model
-    print("── model ───────────────────────────────")
-    log["steps"]["model"], _ = await step_model(adapter, GOAL, page.url, extracted)
-    print()
+        # 5 — Model
+        print("── model ───────────────────────────────")
+        log["steps"]["model"], _ = await step_model(adapter, GOAL, page.url, extracted)
+        print()
 
-    path = write_log(log, hostname)
-    print(f"Log written → {path}")
+    except Exception as exc:
+        log["error"] = str(type(exc).__name__)
+        print(f"  Pipeline failed: {type(exc).__name__}")
+
+    finally:
+        path = write_log(log, hostname)
+        print(f"Log written → {path}")
 
 
 asyncio.run(main())

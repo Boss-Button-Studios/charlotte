@@ -26,6 +26,7 @@ Public class: RobotsHandler
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
@@ -69,6 +70,7 @@ class RobotsHandler:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._cache: dict[str, _CachedEntry] = {}
+        self._cache_locks: dict[str, asyncio.Lock] = {}
 
     async def check(self, url: str, default_delay: float) -> float:
         """Check whether *url* may be fetched per this domain's robots.txt.
@@ -104,7 +106,10 @@ class RobotsHandler:
         scheme = parsed.scheme
 
         if hostname not in self._cache:
-            self._cache[hostname] = await self._fetch_and_parse(scheme, hostname)
+            lock = self._cache_locks.setdefault(hostname, asyncio.Lock())
+            async with lock:
+                if hostname not in self._cache:
+                    self._cache[hostname] = await self._fetch_and_parse(scheme, hostname)
 
         entry = self._cache[hostname]
 
