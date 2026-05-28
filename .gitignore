@@ -170,3 +170,4 @@ playwright/.auth/
 /workflows/
 .claude/
 harness_logs/
+crawl_logs/
