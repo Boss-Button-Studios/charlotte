@@ -517,8 +517,12 @@ async def test_plausibility_failure_skips_page():
 @respx.mock
 async def test_visited_set_prevents_revisit():
     _mock_404_robots()
-    # Both /a and /b link back to start_url; start_url must only be fetched once
-    route_start = respx.get(_START).mock(return_value=httpx.Response(200, text=_HTML_EMPTY))
+    # /a and /b both link back to start_url; dedup must keep start at call_count=1
+    html_start = f'<html><body><p>{_WORDS}</p><a href="/a">A</a><a href="/b">B</a></body></html>'
+    html_back = f'<html><body><p>{_WORDS}</p><a href="/">Home</a></body></html>'
+    route_start = respx.get(_START).mock(return_value=httpx.Response(200, text=html_start))
+    respx.get(f"{_BASE}/a").mock(return_value=httpx.Response(200, text=html_back))
+    respx.get(f"{_BASE}/b").mock(return_value=httpx.Response(200, text=html_back))
 
     result = await crawl(
         _START, _GOAL,
@@ -526,6 +530,7 @@ async def test_visited_set_prevents_revisit():
         stream=False, respect_robots=True, default_delay=0.0,
     )
     assert route_start.call_count == 1
+    assert result.pages_visited == 3
 
 
 # ---------------------------------------------------------------------------
@@ -678,17 +683,28 @@ async def test_crawl_complete_reports_correct_counts():
 
 @respx.mock
 async def test_explicit_allowed_domains_restricts_navigation():
-    """allowed_domains= provided explicitly — other domains not visited."""
+    """allowed_domains= provided explicitly — off-domain links are never visited."""
     respx.get(_ROBOTS).mock(return_value=httpx.Response(404))
-    respx.get(_START).mock(return_value=httpx.Response(200, text=_HTML_CONTACT))
+    html = (
+        f'<html><body><p>{_WORDS}</p>'
+        '<a href="/contact">Contact</a>'
+        '<a href="http://evil.com/page">Off domain</a>'
+        '</body></html>'
+    )
+    respx.get(_START).mock(return_value=httpx.Response(200, text=html))
+    respx.get(_CONTACT).mock(return_value=httpx.Response(200, text=_HTML_CONTACT))
+    evil_route = respx.get("http://evil.com/page").mock(
+        return_value=httpx.Response(200, text=_HTML_EMPTY)
+    )
 
     result = await crawl(
         _START, _GOAL,
-        model=_adapter_found(_START),
+        model=_adapter_found(_CONTACT),
         allowed_domains=["example.com"],
         stream=False, respect_robots=True, default_delay=0.0,
     )
     assert result.found is True
+    assert evil_route.call_count == 0
 
 
 @respx.mock
