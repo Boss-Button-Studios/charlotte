@@ -68,17 +68,26 @@ async def main() -> None:
 
     # 4 — Call LocalAdapter (with validation + one retry on schema failure)
     print("Calling local model...")
-    result = await call_with_validation(
-        adapter,
-        goal=GOAL,
-        navigation_hint=None,
-        page_title="",
-        page_url=page.url,
-        page_summary=extracted.text,
-        available_links=extracted.links,
-        visit_history=[],
-        results_so_far=0,
-    )
+    from charlotte.exceptions import AdapterOutputError
+    try:
+        result = await call_with_validation(
+            adapter,
+            goal=GOAL,
+            navigation_hint=None,
+            page_title="",
+            page_url=page.url,
+            page_summary=extracted.text,
+            available_links=extracted.links,
+            visit_history=[],
+            results_so_far=0,
+        )
+    except AdapterOutputError as exc:
+        print(f"  Model call failed: {exc}")
+        print()
+        print("Tip: warm up the model before running the smoke test:")
+        print('  curl -s http://localhost:11434/api/generate \\')
+        print('       -d \'{"model":"' + adapter._model + '","prompt":"Hi","stream":false}\' | grep -o \'"response":"[^"]*"\'')
+        return
 
     # 5 — Print decision
     print("Model decision:")
