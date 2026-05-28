@@ -79,6 +79,11 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
     if not isinstance(raw, dict):
         raise ValueError(f"adapter output must be a dict, got {type(raw).__name__}")
 
+    _ALLOWED_KEYS = {"found", "confidence", "result_url", "links_to_follow", "reasoning"}
+    extra_keys = set(raw) - _ALLOWED_KEYS
+    if extra_keys:
+        raise ValueError(f"unexpected field(s): {', '.join(sorted(extra_keys))}")
+
     # --- found ---
     if "found" not in raw:
         raise ValueError("missing required field: 'found'")
@@ -90,7 +95,7 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
     if "confidence" not in raw:
         raise ValueError("missing required field: 'confidence'")
     confidence = raw["confidence"]
-    if not isinstance(confidence, (int, float)):
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
         raise ValueError(f"'confidence' must be a float, got {type(confidence).__name__}")
     confidence = float(confidence)
     if not (0.0 <= confidence <= 1.0):

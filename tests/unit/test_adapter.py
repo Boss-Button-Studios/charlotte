@@ -160,6 +160,11 @@ def test_validate_list_raises():
         validate_adapter_output([_VALID_NOT_FOUND])
 
 
+def test_validate_extra_fields_raises():
+    with pytest.raises(ValueError, match="unexpected field"):
+        validate_adapter_output({**_VALID_NOT_FOUND, "injected_key": "evil"})
+
+
 # ---------------------------------------------------------------------------
 # validate_adapter_output — missing fields
 # ---------------------------------------------------------------------------
@@ -184,6 +189,11 @@ def test_validate_found_not_bool_raises():
 def test_validate_confidence_not_numeric_raises():
     with pytest.raises(ValueError, match="confidence.*float"):
         validate_adapter_output({**_VALID_NOT_FOUND, "confidence": "0.5"})
+
+
+def test_validate_confidence_bool_raises():
+    with pytest.raises(ValueError, match="confidence.*float"):
+        validate_adapter_output({**_VALID_NOT_FOUND, "confidence": True})
 
 
 def test_validate_links_not_list_raises():
