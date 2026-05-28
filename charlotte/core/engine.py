@@ -15,7 +15,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
-from charlotte.core.adapter_validation import AdapterOutput, call_with_validation
+from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher
 from charlotte.core.normalizer import normalize_url
