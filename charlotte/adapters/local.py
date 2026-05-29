@@ -23,6 +23,7 @@ See spec §6.3, §6.4.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from urllib.parse import urlsplit
 
@@ -33,6 +34,8 @@ from charlotte.exceptions import (
     CharlotteConfigError,
     CharlotteTimeoutError,
 )
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3:8b"
@@ -205,13 +208,19 @@ class LocalAdapter:
                 response = await client.post(self._endpoint, json=payload)
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
+            logger.debug("Local model call timed out", exc_info=True)
             raise CharlotteTimeoutError("Local model call timed out") from exc
         except httpx.HTTPStatusError as exc:
             # Suppress chain — response body may contain sensitive server detail.
+            # Log type only, never exc_info. See §18.
+            logger.debug("Local model endpoint returned HTTP error: %s", type(exc).__name__)
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except Exception:
+        except Exception as exc:
+            # Log type only — network error messages may include server addresses
+            # or tokens. See §18.
+            logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
             ) from None
@@ -222,10 +231,14 @@ class LocalAdapter:
             raw_content = data["choices"][0]["message"]["content"] or ""
             return json.loads(raw_content)
         except json.JSONDecodeError as exc:
+            # Suppress chain — JSONDecodeError.doc contains the model output. See §18.
+            logger.debug("Local model response JSON decode failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model response was not valid JSON"
-            ) from exc
+            ) from None
         except (KeyError, IndexError, TypeError) as exc:
+            # Suppress chain — structural errors may reference response data. See §18.
+            logger.debug("Local model response has unexpected structure: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model response has unexpected structure"
-            ) from exc
+            ) from None

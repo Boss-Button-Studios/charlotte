@@ -14,9 +14,12 @@ api_key= constructor argument. See spec §6.3.
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from charlotte.exceptions import AdapterOutputError, CharlotteConfigError
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "llama-3.1-8b-instant"
 
@@ -163,15 +166,18 @@ class GroqAdapter:
             raw_content = response.choices[0].message.content or ""
             return json.loads(raw_content)
         except json.JSONDecodeError as exc:
+            # Suppress chain — JSONDecodeError.doc contains the full model output,
+            # which may include sensitive page content. See §18.
+            logger.debug("Groq response JSON decode failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Groq response was not valid JSON"
-            ) from exc
+            ) from None
         except AdapterOutputError:
             raise
-        except Exception:
-            # Wrap all groq SDK exceptions (GroqError subclasses) and any other
-            # unexpected errors. The chain is suppressed (from None) to prevent
-            # API keys or response bodies from leaking into tracebacks. See §6.5, §18.
+        except Exception as exc:
+            # Suppress chain — groq SDK exceptions may contain API keys or
+            # provider response bodies. Log type only, never exc_info. See §6.5, §18.
+            logger.debug("Groq API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Groq API call failed — see logs for detail"
             ) from None
