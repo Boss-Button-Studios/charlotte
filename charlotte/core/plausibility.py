@@ -2,14 +2,19 @@
 Navigation plausibility check for Charlotte (spec §9.3).
 
 Layer 3 of the sanitization pipeline. Applied to validated model output before
-Charlotte acts on it. Detects four categories of suspicious model behaviour
+Charlotte acts on it. Detects three categories of suspicious model behaviour
 that indicate the navigator model may have been influenced by page content:
 
-  1. Off-domain links       — links_to_follow contains out-of-scope hostnames
-  2. Instruction mirroring  — reasoning echoes injection language ("ignore your
+  1. Instruction mirroring  — reasoning echoes injection language ("ignore your
                               goal", "I have been instructed to...", etc.)
-  3. Confidence spike       — high confidence on a page with very thin content
-  4. Zero links / no path   — found=False with an empty links_to_follow
+  2. Confidence spike       — high confidence on a page with very thin content
+  3. Zero links / no path   — found=False with an empty links_to_follow
+
+Off-domain link detection was removed: the extractor now passes all observable
+links to the model (including external ones), the provenance check verifies
+every URL was genuinely on the page, and the engine's enqueue step restricts
+navigation to allowed_domains. A separate plausibility gate is redundant and
+would block legitimate decisions on pages like Hacker News.
 
 Each triggered condition is recorded as a PlausibilityFlag. The engine uses
 PlausibilityResult.passed to decide whether to act on the decision or discard
@@ -27,8 +32,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
-
 from charlotte.exceptions import CharlotteInternalError
 
 # ---------------------------------------------------------------------------
@@ -93,7 +96,7 @@ class PlausibilityFlag:
     """A single triggered plausibility condition.
 
     Attributes:
-        name:   Short machine-readable identifier (e.g. "off_domain_link").
+        name:   Short machine-readable identifier (e.g. "instruction_mirroring").
         detail: Human-readable explanation suitable for the visit log.
     """
 
@@ -122,12 +125,11 @@ class PlausibilityResult:
 def check_plausibility(
     decision: NavDecision,
     page_text: str,
-    allowed_domains: set[str] | frozenset[str] | None,
     visited_urls: set[str],
 ) -> PlausibilityResult:
     """Check a validated model decision for signs of prompt injection or drift.
 
-    Evaluates four flag conditions defined in spec §9.3. Any triggered flag
+    Evaluates three flag conditions defined in spec §9.3. Any triggered flag
     causes the result to be marked as failed. The engine discards failed
     decisions and retries or skips the page.
 
@@ -135,8 +137,6 @@ def check_plausibility(
         decision:        Validated model output for the current page.
         page_text:       Visible text extracted from the page (pre-truncation).
                          Used for the thin-content confidence-spike check.
-        allowed_domains: Hostnames the crawl is scoped to. None means no
-                         domain restriction — the off-domain check is skipped.
         visited_urls:    Accepted but unused — retained for call-site compatibility.
 
     Returns:
@@ -148,10 +148,6 @@ def check_plausibility(
     """
     try:
         flags: list[PlausibilityFlag] = []
-
-        flag = _check_off_domain(decision, allowed_domains)
-        if flag:
-            flags.append(flag)
 
         flag = _check_instruction_mirroring(decision)
         if flag:
@@ -180,31 +176,6 @@ def check_plausibility(
 # ---------------------------------------------------------------------------
 # Private flag checks
 # ---------------------------------------------------------------------------
-
-def _check_off_domain(
-    decision: NavDecision,
-    allowed_domains: set[str] | frozenset[str] | None,
-) -> PlausibilityFlag | None:
-    """Flag if any recommended link is outside the allowed domain set."""
-    if allowed_domains is None:
-        return None
-    offenders: list[str] = []
-    for url in decision.links_to_follow:
-        hostname = urlsplit(url).hostname or ""
-        if hostname not in allowed_domains:
-            offenders.append(url)
-    if not offenders:
-        return None
-    # Log hostnames only — full URLs may carry query-string tokens.
-    sample_hosts = [urlsplit(u).hostname or "" for u in offenders[:3]]
-    return PlausibilityFlag(
-        name="off_domain_link",
-        detail=(
-            f"{len(offenders)} link(s) outside allowed_domains in "
-            f"links_to_follow (host sample): {sample_hosts}"
-        ),
-    )
-
 
 def _check_instruction_mirroring(
     decision: NavDecision,

@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from urllib.parse import urlsplit
 
 import httpx
@@ -37,6 +38,14 @@ from charlotte.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Matches <think>...</think> or <thinking>...</thinking> blocks emitted by
+# reasoning models (deepseek-r1, QwQ, etc.) before their JSON answer.
+_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+# Some serving paths omit the opening tag from message.content (it lives in the
+# chat template instead), leaving a lone </think> separator. Strip everything
+# before it as reasoning preamble.
+_LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3:8b"
 _COMPLETIONS_PATH = "/v1/chat/completions"
@@ -47,14 +56,16 @@ evaluate the page and decide whether the goal has been satisfied, and which link
 are worth following next.
 
 You must respond with a valid JSON object containing exactly these five fields:
-  "found"           — boolean: true only if this page directly satisfies the goal
-  "confidence"      — float: your confidence, between 0.0 and 1.0 inclusive
+  "found"           — boolean: true if this page satisfies the goal; false otherwise
+  "confidence"      — float: how strongly this page satisfies the goal (0.0 = definitely not, 1.0 = definitely yes)
   "result_url"      — string or null: URL of the result when found=true; null when found=false
   "links_to_follow" — array of strings: URLs worth visiting next, best-first; may be empty
   "reasoning"       — string: brief non-empty explanation of your decision
 
 Rules:
-- Set "found" to true only when the current page itself satisfies the goal.
+- If the current page IS what the goal describes, set found=true and result_url to the current page URL. Do not keep searching when you are already on the answer.
+- If the goal is to find a link or URL, and a matching link is visible on this page, set found=true and result_url to that link — you do not need to visit it first.
+- "confidence" measures how well this page satisfies the goal — not confidence in your reasoning. A value near 1.0 means this page strongly satisfies the goal; near 0.0 means it does not.
 - "result_url" must be a URL from this page when found=true, and null when found=false.
 - "links_to_follow" may be non-empty even when found=true if more results may exist.
 - Respond with JSON only. No prose outside the JSON object.\
@@ -229,7 +240,9 @@ class LocalAdapter:
         try:
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"] or ""
-            return json.loads(raw_content)
+            content = _THINK_TAG_RE.sub("", raw_content)
+            content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
+            return json.loads(content)
         except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the model output. See §18.
             logger.debug("Local model response JSON decode failed: %s", type(exc).__name__)

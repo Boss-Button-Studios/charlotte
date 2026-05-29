@@ -430,3 +430,56 @@ async def test_missing_content_key_raises_adapter_output_error():
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
+
+
+# ---------------------------------------------------------------------------
+# Thinking-model tag stripping
+# ---------------------------------------------------------------------------
+
+@respx.mock
+async def test_think_tag_stripped_before_json_parse():
+    """<think>...</think> block before JSON is stripped; valid JSON is returned."""
+    raw = "<think>Let me reason about this step by step.</think>\n" + json.dumps(_VALID_NAV_DICT)
+    body = {"choices": [{"message": {"content": raw}}]}
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+@respx.mock
+async def test_thinking_tag_variant_stripped():
+    """<thinking>...</thinking> variant (some models use this form) is also stripped."""
+    raw = "<thinking>Internal chain-of-thought here.</thinking>\n" + json.dumps(_VALID_NAV_DICT)
+    body = {"choices": [{"message": {"content": raw}}]}
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+@respx.mock
+async def test_think_tag_multiline_stripped():
+    """A multi-line <think> block is fully stripped regardless of newlines."""
+    think_block = "<think>\nLine one.\nLine two.\nLine three.\n</think>\n"
+    raw = think_block + json.dumps(_VALID_NAV_DICT)
+    body = {"choices": [{"message": {"content": raw}}]}
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+@respx.mock
+async def test_lone_close_think_tag_stripped():
+    """A lone </think> separator (opening tag absent from content) is stripped."""
+    raw = "Some reasoning text here.</think>\n" + json.dumps(_VALID_NAV_DICT)
+    body = {"choices": [{"message": {"content": raw}}]}
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+@respx.mock
+async def test_no_think_tag_still_works():
+    """A normal response with no think tags is parsed unchanged."""
+    respx.post(_ENDPOINT).mock(return_value=_ok_response())
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False

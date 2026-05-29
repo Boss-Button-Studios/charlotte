@@ -3,8 +3,8 @@ Content extractor for Charlotte (spec §10).
 
 Converts sanitized HTML into the two structures the navigator model needs:
   - visible text (collapsed whitespace, truncated to max_text_chars)
-  - link list ({text, url} dicts — resolved absolute URLs, filtered by domain,
-    deduplicated via normalized comparison, capped at max_links)
+  - link list ({text, url} dicts — resolved absolute URLs, all http/https links
+    included, deduplicated via normalized comparison, capped at max_links)
 
 The extractor operates on already-sanitized HTML. It is not responsible for
 security — that is the sanitizer's job (spec §9.1). Its only concern is
@@ -62,7 +62,6 @@ def _resolve_href(href: str, page_url: str) -> str | None:
 def extract(
     html: str,
     page_url: str,
-    allowed_domains: set[str] | frozenset[str] | None = None,
     max_text_chars: int = _DEFAULT_MAX_TEXT_CHARS,
     max_links: int = _DEFAULT_MAX_LINKS,
 ) -> ExtractedPage:
@@ -72,14 +71,13 @@ def extract(
     whitespace collapsed, truncated to max_text_chars characters.
 
     Link extraction: every <a href="..."> is resolved to an absolute URL,
-    filtered to http/https and to allowed_domains (when provided), deduplicated
-    using normalized URL comparison, and capped at max_links entries.
+    filtered to http/https only, deduplicated using normalized URL comparison,
+    and capped at max_links entries. Domain filtering is the engine's job —
+    the extractor returns all observable links so the model can evaluate them.
 
     Args:
         html:            Sanitized HTML string from the Layer 1 sanitizer.
         page_url:        Absolute URL of the page — used to resolve relative hrefs.
-        allowed_domains: Set of hostnames to keep (e.g. {"example.com"}). When
-                         None, all http/https links are included.
         max_text_chars:  Character budget for the text summary.
         max_links:       Maximum number of links to return.
 
@@ -111,12 +109,6 @@ def extract(
             resolved = _resolve_href(href, page_url)
             if resolved is None:
                 continue
-
-            # Domain filter — compare against the hostname component only.
-            if allowed_domains is not None:
-                hostname = urlsplit(resolved).hostname or ""
-                if hostname not in allowed_domains:
-                    continue
 
             # Deduplicate via normalized comparison.
             try:
