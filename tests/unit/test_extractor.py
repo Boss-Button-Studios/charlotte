@@ -1,8 +1,8 @@
 """
 Unit tests for the content extractor (CHAR-007, spec §10).
 
-Covers visible text extraction, link extraction, URL resolution, domain
-filtering, deduplication, budget truncation, and exception boundaries.
+Covers visible text extraction, link extraction, URL resolution,
+deduplication, budget truncation, and exception boundaries.
 """
 
 from unittest.mock import MagicMock, patch
@@ -194,56 +194,19 @@ def test_ftp_link_excluded():
 
 
 # ---------------------------------------------------------------------------
-# Domain filtering
+# All http/https links included — no domain filtering in extractor
 # ---------------------------------------------------------------------------
 
-def test_domain_filter_keeps_matching_links():
-    """Links whose hostname is in allowed_domains are kept; others are dropped."""
+def test_external_links_included():
+    """External links are returned — domain filtering is the engine's job, not ours."""
     html = (
         '<a href="https://example.com/a">Same domain</a>'
         '<a href="https://other.com/b">Other domain</a>'
     )
-    page = extract(html, _BASE, allowed_domains={"example.com"})
-    assert len(page.links) == 1
-    assert "example.com" in page.links[0]["url"]
-
-
-def test_domain_filter_none_allows_all_http_links():
-    """allowed_domains=None disables domain filtering — all http/https links pass."""
-    html = (
-        '<a href="https://example.com/a">A</a>'
-        '<a href="https://other.com/b">B</a>'
-    )
-    page = extract(html, _BASE, allowed_domains=None)
-    assert len(page.links) == 2
-
-
-def test_domain_filter_empty_set_excludes_all():
-    """An empty allowed_domains set means no domain matches — all links are dropped."""
-    html = '<a href="https://example.com/a">A</a>'
-    page = extract(html, _BASE, allowed_domains=set())
-    assert page.links == []
-
-
-def test_domain_filter_multiple_domains():
-    """Multiple entries in allowed_domains each pass their matching links."""
-    html = (
-        '<a href="https://alpha.com/x">Alpha</a>'
-        '<a href="https://beta.com/y">Beta</a>'
-        '<a href="https://gamma.com/z">Gamma</a>'
-    )
-    page = extract(html, _BASE, allowed_domains={"alpha.com", "beta.com"})
+    page = extract(html, _BASE)
     urls = [lnk["url"] for lnk in page.links]
-    assert any("alpha.com" in u for u in urls)
-    assert any("beta.com" in u for u in urls)
-    assert not any("gamma.com" in u for u in urls)
-
-
-def test_domain_filter_uses_hostname_only_not_path():
-    """Domain filtering compares on hostname, not on URL substring — path cannot spoof it."""
-    html = '<a href="https://notexample.com/example.com">Tricky</a>'
-    page = extract(html, _BASE, allowed_domains={"example.com"})
-    assert page.links == []
+    assert any("example.com" in u for u in urls)
+    assert any("other.com" in u for u in urls)
 
 
 # ---------------------------------------------------------------------------

@@ -509,6 +509,50 @@ async def test_groq_adapter_output_error_from_client_reraises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GroqAdapter — thinking-model tag stripping
+# ---------------------------------------------------------------------------
+
+async def test_groq_think_tag_stripped_before_json_parse(monkeypatch):
+    """<think>...</think> block before JSON is stripped; valid JSON is returned."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    raw = "<think>Let me reason about this step by step.</think>\n" + json.dumps(_VALID_NOT_FOUND)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(raw)
+    )
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+async def test_groq_thinking_tag_variant_stripped(monkeypatch):
+    """<thinking>...</thinking> variant is also stripped before JSON parse."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    raw = "<thinking>Internal chain-of-thought.</thinking>\n" + json.dumps(_VALID_NOT_FOUND)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(raw)
+    )
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+async def test_groq_think_tag_multiline_stripped(monkeypatch):
+    """A multi-line <think> block is fully stripped regardless of newlines."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    think_block = "<think>\nLine one.\nLine two.\nLine three.\n</think>\n"
+    raw = think_block + json.dumps(_VALID_NOT_FOUND)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(raw)
+    )
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+# ---------------------------------------------------------------------------
 # GroqAdapter — prompt construction
 # ---------------------------------------------------------------------------
 

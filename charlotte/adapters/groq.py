@@ -16,10 +16,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 from charlotte.exceptions import AdapterOutputError, CharlotteConfigError
 
 logger = logging.getLogger(__name__)
+
+_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _DEFAULT_MODEL = "llama-3.1-8b-instant"
 
@@ -164,7 +167,8 @@ class GroqAdapter:
                 response_format={"type": "json_object"},
             )
             raw_content = response.choices[0].message.content or ""
-            return json.loads(raw_content)
+            content = _THINK_TAG_RE.sub("", raw_content).strip()
+            return json.loads(content)
         except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the full model output,
             # which may include sensitive page content. See §18.

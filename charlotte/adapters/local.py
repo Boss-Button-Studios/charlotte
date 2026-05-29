@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from urllib.parse import urlsplit
 
 import httpx
@@ -36,6 +37,10 @@ from charlotte.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Matches <think>...</think> or <thinking>...</thinking> blocks emitted by
+# reasoning models (deepseek-r1, QwQ, etc.) before their JSON answer.
+_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3:8b"
@@ -229,7 +234,9 @@ class LocalAdapter:
         try:
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"] or ""
-            return json.loads(raw_content)
+            # Strip reasoning-model thinking blocks before JSON parsing.
+            content = _THINK_TAG_RE.sub("", raw_content).strip()
+            return json.loads(content)
         except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the model output. See §18.
             logger.debug("Local model response JSON decode failed: %s", type(exc).__name__)

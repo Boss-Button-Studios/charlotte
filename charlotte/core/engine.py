@@ -261,9 +261,10 @@ async def _crawl_core(
         pages_visited += 1
         yield PageFetched(url=page.url, depth=depth, http_status=page.status_code, fetch_ms=page.fetch_ms)
 
-        # Sanitize → extract
+        # Sanitize → extract (no domain filter — model sees all observable links;
+        # navigation is restricted at the enqueue step below)
         clean = strip_hidden(page.html)
-        extracted = extract(clean, page_url=page.url, allowed_domains=set(allowed_domains))
+        extracted = extract(clean, page_url=page.url)
 
         # Model call
         history = [e.url for e in visit_log[-10:]]
@@ -307,12 +308,12 @@ async def _crawl_core(
         plaus = check_plausibility(
             decision=decision,
             page_text=extracted.text,
-            allowed_domains=allowed_domains,
             visited_urls=visited,
         )
         if not plaus.passed:
             reason = "; ".join(f.detail for f in plaus.flags)
-            model_summary = f"model: found={output.found}, conf={output.confidence:.2f}"
+            prov_note = "" if prov.result_url_accepted else " [provenance rejected result_url]"
+            model_summary = f"model: found={effective_found}, conf={output.confidence:.2f}{prov_note}"
             yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
             continue
 
