@@ -163,6 +163,22 @@ async def test_redirect_to_previously_visited_url_raises():
         await _fetcher().fetch(f"{_BASE}/new", visited_urls=visited)
 
 
+@respx.mock
+async def test_trailing_slash_canonical_redirect_not_loop():
+    """Server-side /path → /path/ redirect must not be detected as a loop."""
+    respx.get(f"{_BASE}/docs").mock(
+        return_value=httpx.Response(301, headers={"location": f"{_BASE}/docs/"})
+    )
+    respx.get(f"{_BASE}/docs/").mock(
+        return_value=httpx.Response(200, text="<html><body>docs</body></html>")
+    )
+
+    fetcher = _fetcher(allowed_domains={"example.com"})
+    result = await fetcher.fetch(f"{_BASE}/docs", visited_urls=set())
+    assert result.url == f"{_BASE}/docs/"
+    assert result.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # T-18: Redirect chain exceeding 5 hops — CharlotteRedirectError
 # ---------------------------------------------------------------------------
@@ -288,13 +304,12 @@ async def test_decoding_error_on_response_text_raises_network_error():
 async def test_invalid_redirect_destination_raises_redirect_error():
     # If the redirect Location resolves to a URL normalize_url rejects, we get
     # CharlotteRedirectError rather than a raw CharlotteConfigError.
-    # The first normalize_url call builds chain_seen; the second (for the
-    # redirect destination) is the one that raises.
+    # chain_seen is seeded from the raw input URL, so the only normalize_url
+    # call is for the redirect destination — that call is the one that raises.
     respx.get(f"{_BASE}/page").mock(
         return_value=httpx.Response(302, headers={"location": f"{_BASE}/dest"})
     )
     with patch("charlotte.core.fetcher.normalize_url", side_effect=[
-        "http://example.com/page",   # initial chain_seen seed — succeeds
         CharlotteConfigError("bad"), # redirect destination normalize — raises
     ]):
         with pytest.raises(CharlotteRedirectError, match="not a valid URL"):

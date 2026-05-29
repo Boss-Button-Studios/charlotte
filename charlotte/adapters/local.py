@@ -134,8 +134,9 @@ class LocalAdapter:
         model_name: Model name string passed to the API. Constructor argument takes
                     precedence over ``CHARLOTTE_LOCAL_MODEL``.
                     Default: ``llama3:8b``.
-        timeout:    Total request timeout in seconds. Local inference can be slow
-                    on modest hardware. Default: 120.0.
+        timeout:    Total request timeout in seconds, or None for no timeout.
+                    Local inference time is hardware-dependent and unbounded;
+                    None (the default) waits as long as the model needs.
 
     Raises:
         CharlotteConfigError: ``base_url`` does not start with ``http://`` or
@@ -146,7 +147,7 @@ class LocalAdapter:
         self,
         base_url: str | None = None,
         model_name: str | None = None,
-        timeout: float = 120.0,
+        timeout: float | None = None,
     ) -> None:
         resolved_base = (
             base_url or os.environ.get("CHARLOTTE_LOCAL_BASE_URL", _DEFAULT_BASE_URL)

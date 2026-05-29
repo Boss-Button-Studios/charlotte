@@ -2,19 +2,22 @@
 Navigation plausibility check for Charlotte (spec §9.3).
 
 Layer 3 of the sanitization pipeline. Applied to validated model output before
-Charlotte acts on it. Detects five categories of suspicious model behaviour
+Charlotte acts on it. Detects four categories of suspicious model behaviour
 that indicate the navigator model may have been influenced by page content:
 
   1. Off-domain links       — links_to_follow contains out-of-scope hostnames
-  2. Already-visited links  — links_to_follow points to pages already seen
-  3. Instruction mirroring  — reasoning echoes injection language ("ignore your
+  2. Instruction mirroring  — reasoning echoes injection language ("ignore your
                               goal", "I have been instructed to...", etc.)
-  4. Confidence spike       — high confidence on a page with very thin content
-  5. Zero links / no path   — found=False with an empty links_to_follow
+  3. Confidence spike       — high confidence on a page with very thin content
+  4. Zero links / no path   — found=False with an empty links_to_follow
 
 Each triggered condition is recorded as a PlausibilityFlag. The engine uses
 PlausibilityResult.passed to decide whether to act on the decision or discard
 it and retry.
+
+Note: back-links (links_to_follow pointing to already-visited pages) are NOT
+flagged here. They are normal model behaviour — a page often links back to its
+parent. The engine already skips visited URLs when building the crawl queue.
 
 Public function: check_plausibility(...) -> PlausibilityResult
 Public types:    NavDecision, PlausibilityFlag, PlausibilityResult
@@ -26,8 +29,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
-from charlotte.core.normalizer import normalize_url
-from charlotte.exceptions import CharlotteConfigError, CharlotteInternalError
+from charlotte.exceptions import CharlotteInternalError
 
 # ---------------------------------------------------------------------------
 # Thresholds (module-level constants so tests can reference them)
@@ -125,13 +127,9 @@ def check_plausibility(
 ) -> PlausibilityResult:
     """Check a validated model decision for signs of prompt injection or drift.
 
-    Evaluates five flag conditions defined in spec §9.3. Any triggered flag
+    Evaluates four flag conditions defined in spec §9.3. Any triggered flag
     causes the result to be marked as failed. The engine discards failed
     decisions and retries or skips the page.
-
-    The visited_urls set must contain normalized URLs (as maintained by the
-    engine's visited-set). URLs in decision.links_to_follow are normalized
-    before comparison.
 
     Args:
         decision:        Validated model output for the current page.
@@ -139,7 +137,7 @@ def check_plausibility(
                          Used for the thin-content confidence-spike check.
         allowed_domains: Hostnames the crawl is scoped to. None means no
                          domain restriction — the off-domain check is skipped.
-        visited_urls:    Set of normalized URLs already visited this crawl.
+        visited_urls:    Accepted but unused — retained for call-site compatibility.
 
     Returns:
         PlausibilityResult with passed=True and empty flags if all checks pass;
@@ -152,10 +150,6 @@ def check_plausibility(
         flags: list[PlausibilityFlag] = []
 
         flag = _check_off_domain(decision, allowed_domains)
-        if flag:
-            flags.append(flag)
-
-        flag = _check_already_visited(decision, visited_urls)
         if flag:
             flags.append(flag)
 
@@ -208,33 +202,6 @@ def _check_off_domain(
         detail=(
             f"{len(offenders)} link(s) outside allowed_domains in "
             f"links_to_follow (host sample): {sample_hosts}"
-        ),
-    )
-
-
-def _check_already_visited(
-    decision: NavDecision,
-    visited_urls: set[str],
-) -> PlausibilityFlag | None:
-    """Flag if any recommended link was already visited this crawl."""
-    offenders: list[str] = []
-    for url in decision.links_to_follow:
-        try:
-            norm = normalize_url(url)
-        except CharlotteConfigError:
-            # Malformed URL — can't have been visited; skip.
-            continue
-        if norm in visited_urls:
-            offenders.append(url)
-    if not offenders:
-        return None
-    # Log hostnames only — full URLs may carry query-string tokens.
-    sample_hosts = [urlsplit(u).hostname or "" for u in offenders[:3]]
-    return PlausibilityFlag(
-        name="already_visited_link",
-        detail=(
-            f"{len(offenders)} link(s) in links_to_follow already in "
-            f"visited set (host sample): {sample_hosts}"
         ),
     )
 

@@ -3,14 +3,13 @@
 Published on PyPI as ``charlotte-crawler``. All public types, exceptions, and
 streaming events are importable directly from this package:
 
-    from charlotte import crawl, CrawlResult, CharlotteError, CrawlStarted
-
-``find_link()`` is implemented in CHAR-014 and will be exported here once complete.
+    from charlotte import crawl, find_link, CrawlResult, CharlotteError, CrawlStarted
 """
 
 __version__ = "0.1.0"
 
 from charlotte.core.engine import crawl
+from charlotte.core.find_link import find_link
 from charlotte.exceptions import (
     AdapterOutputError,
     CharlotteConfigError,
@@ -39,7 +38,7 @@ from charlotte.models import (
 __all__ = [
     # Public functions
     "crawl",
-    # "find_link",  — CHAR-014
+    "find_link",
     # Result types
     "CrawlResult",
     "LinkResult",

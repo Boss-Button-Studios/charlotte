@@ -177,6 +177,49 @@ async def test_stream_true_returns_async_generator():
 
 
 # ---------------------------------------------------------------------------
+# www. / apex redirect handling
+# ---------------------------------------------------------------------------
+
+@respx.mock
+async def test_apex_to_www_redirect_is_followed():
+    """Default allowed_domains includes www. counterpart so apex→www redirects succeed."""
+    # rchsd.org → www.rchsd.org redirect pattern
+    respx.get("http://example.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("http://www.example.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("http://www.example.com/").mock(
+        return_value=httpx.Response(200, text=_HTML_CONTACT)
+    )
+
+    from charlotte.core import fetcher as fetcher_mod
+
+    original_fetch = fetcher_mod.PageFetcher.fetch
+
+    async def _redirect_fetch(self, url, *, visited_urls):
+        if "www" not in url:
+            from charlotte.core.fetcher import FetchResult
+            return FetchResult(
+                url="http://www.example.com/",
+                html=_HTML_CONTACT,
+                status_code=200,
+                fetch_ms=10,
+                redirect_chain=[(301, "http://www.example.com/")],
+            )
+        return await original_fetch(self, url, visited_urls=visited_urls)
+
+    fetcher_mod.PageFetcher.fetch = _redirect_fetch
+    try:
+        result = await crawl(
+            "http://example.com/", _GOAL,
+            model=_adapter_found("http://www.example.com/"),
+            stream=False, respect_robots=True, default_delay=0.0,
+        )
+    finally:
+        fetcher_mod.PageFetcher.fetch = original_fetch
+
+    assert result.found is True
+
+
+# ---------------------------------------------------------------------------
 # Single-page result found immediately
 # ---------------------------------------------------------------------------
 

@@ -26,9 +26,10 @@ hardware. Warm it up first if Ollama has just started:
 import asyncio
 import sys
 import textwrap
+from time import monotonic
 
 from charlotte.adapters.local import LocalAdapter
-from charlotte.core.engine import call_with_validation
+from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher
 from charlotte.core.sanitizer import strip_hidden
@@ -39,7 +40,10 @@ GOAL = sys.argv[2] if len(sys.argv) > 2 else "Find a story about AI"
 
 async def main() -> None:
     from urllib.parse import urlsplit
-    hostname = urlsplit(URL).hostname or ""
+    base_hostname = urlsplit(URL).hostname or ""
+    # Include www./non-www counterpart so apex→www (or www→apex) redirects are followed.
+    www_counterpart = base_hostname[4:] if base_hostname.startswith("www.") else f"www.{base_hostname}"
+    allowed = {base_hostname, www_counterpart}
 
     adapter = LocalAdapter()
 
@@ -50,34 +54,46 @@ async def main() -> None:
 
     # 1 — Fetch
     print("Fetching page...")
-    fetcher = PageFetcher(allowed_domains={hostname}, polite_delay=0.0)
+    fetcher = PageFetcher(allowed_domains=allowed, polite_delay=0.0)
+    t0 = monotonic()
     page = await fetcher.fetch(URL, visited_urls=set())
-    print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)")
+    hostname = urlsplit(page.url).hostname or base_hostname  # follow redirects
+    print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)  [{monotonic()-t0:.1f}s]")
 
     # 2 — Sanitize (Layer 1: strip hidden content)
     clean_html = strip_hidden(page.html)
 
     # 3 — Extract text and links
-    extracted = extract(clean_html, page_url=page.url, allowed_domains={hostname})
+    extracted = extract(clean_html, page_url=page.url, allowed_domains=allowed)
     print(f"  Extracted {len(extracted.text):,} chars of text, {len(extracted.links)} links")
     print()
 
     # 4 — Call LocalAdapter (with validation + one retry on schema failure)
     print("Calling local model...")
-    result = await call_with_validation(
-        adapter,
-        goal=GOAL,
-        navigation_hint=None,
-        page_title="",
-        page_url=page.url,
-        page_summary=extracted.text,
-        available_links=extracted.links,
-        visit_history=[],
-        results_so_far=0,
-    )
+    from charlotte.exceptions import AdapterOutputError
+    t0 = monotonic()
+    try:
+        result = await call_with_validation(
+            adapter,
+            goal=GOAL,
+            navigation_hint=None,
+            page_title="",
+            page_url=page.url,
+            page_summary=extracted.text,
+            available_links=extracted.links,
+            visit_history=[],
+            results_so_far=0,
+        )
+    except AdapterOutputError as exc:
+        print(f"  Model call failed: {exc}")
+        print()
+        print("Tip: warm up the model before running the smoke test:")
+        print('  curl -s http://localhost:11434/api/generate \\')
+        print('       -d \'{"model":"' + adapter._model + '","prompt":"Hi","stream":false}\' | grep -o \'"response":"[^"]*"\'')
+        return
 
     # 5 — Print decision
-    print("Model decision:")
+    print(f"Model decision:  [{monotonic()-t0:.1f}s]")
     print(f"  found:      {result.found}")
     print(f"  confidence: {result.confidence:.2f}")
     print(f"  result_url: {result.result_url}")
