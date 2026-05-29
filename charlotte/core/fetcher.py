@@ -123,7 +123,7 @@ class PageFetcher:
         await asyncio.sleep(self._polite_delay)
 
         if self._render_js:
-            return await self._fetch_with_playwright(url)
+            return await self._fetch_with_playwright(url, visited_urls=visited_urls)
 
         timeout = httpx.Timeout(
             connect=self._connect_timeout,
@@ -209,12 +209,15 @@ class PageFetcher:
                 chain_seen.add(destination)
                 current_url = destination
 
-    async def _fetch_with_playwright(self, url: str) -> FetchResult:
+    async def _fetch_with_playwright(
+        self, url: str, *, visited_urls: set[str]
+    ) -> FetchResult:
         """Fetch a JS-rendered page using headless Chromium via Playwright.
 
         Launches a fresh browser per call (no cross-request session state).
         Waits for network activity to settle before capturing the DOM.
-        Redirects are followed by Playwright automatically.
+        Redirects are followed by Playwright automatically; the final URL is
+        validated against allowed_domains and visited_urls after navigation.
         """
         start = time.monotonic()
         try:
@@ -236,12 +239,29 @@ class PageFetcher:
             raise CharlotteTimeoutError(
                 f"Render timeout fetching {url!r}"
             ) from exc
-        except (CharlotteTimeoutError, CharlotteNetworkError):
+        except (CharlotteTimeoutError, CharlotteNetworkError, CharlotteRedirectError):
             raise
         except Exception as exc:
             raise CharlotteNetworkError(
                 f"Playwright error fetching {url!r}: {type(exc).__name__}"
             ) from exc
+
+        # Post-navigation domain and loop checks — mirrors the httpx redirect policy.
+        if not self._is_allowed(final_url):
+            raise CharlotteRedirectError(
+                f"Redirect from {url!r} to {final_url!r} crosses into "
+                f"disallowed domain {self._hostname(final_url)!r}"
+            )
+        try:
+            norm_final = normalize_url(final_url)
+        except CharlotteConfigError as exc:
+            raise CharlotteRedirectError(
+                f"Redirect destination {final_url!r} is not a valid URL: {exc}"
+            ) from exc
+        if norm_final in visited_urls:
+            raise CharlotteRedirectError(
+                f"Redirect loop detected: {final_url!r} already visited"
+            )
 
         return FetchResult(
             url=final_url,

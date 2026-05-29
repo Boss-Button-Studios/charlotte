@@ -10,6 +10,7 @@ See spec §4, §5.1, §12, §17.
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
@@ -108,6 +109,10 @@ def crawl(
         # Check availability before the generator starts — spec §8 requires the
         # error to surface immediately, not on the first iteration.
         _import_playwright()
+    if not math.isfinite(render_timeout) or render_timeout <= 0:
+        raise CharlotteConfigError(
+            f"render_timeout must be a finite positive number, got: {render_timeout!r}"
+        )
     if model is None:
         raise CharlotteConfigError(
             "No model adapter provided. Pass model=LocalAdapter() or model=GroqAdapter()."

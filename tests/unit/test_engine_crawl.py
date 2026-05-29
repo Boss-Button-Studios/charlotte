@@ -142,6 +142,24 @@ def test_render_js_raises_config_error_when_playwright_not_installed():
             crawl(_START, _GOAL, model=_m, render_js=True)
 
 
+def test_render_timeout_zero_raises_config_error():
+    async def _m(**_): return {}
+    with pytest.raises(CharlotteConfigError, match="render_timeout"):
+        crawl(_START, _GOAL, model=_m, render_timeout=0)
+
+
+def test_render_timeout_negative_raises_config_error():
+    async def _m(**_): return {}
+    with pytest.raises(CharlotteConfigError, match="render_timeout"):
+        crawl(_START, _GOAL, model=_m, render_timeout=-5.0)
+
+
+def test_render_timeout_nan_raises_config_error():
+    async def _m(**_): return {}
+    with pytest.raises(CharlotteConfigError, match="render_timeout"):
+        crawl(_START, _GOAL, model=_m, render_timeout=float("nan"))
+
+
 def test_invalid_start_url_raises_config_error():
     async def _m(**_): return {}
     with pytest.raises(CharlotteConfigError, match="Invalid start_url"):

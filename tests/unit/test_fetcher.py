@@ -146,6 +146,29 @@ async def test_render_js_unexpected_error_raises_network_error():
         await fetcher.fetch("http://example.com/", visited_urls=set())
 
 
+@pytest.mark.asyncio
+async def test_render_js_off_domain_final_url_raises_redirect_error():
+    """If Playwright lands on a disallowed domain, CharlotteRedirectError is raised."""
+    fetcher, _ = _make_playwright_fetcher(
+        url="http://example.com/page",
+        final_url="http://evil.com/landed",
+    )
+    with pytest.raises(CharlotteRedirectError, match="disallowed domain"):
+        await fetcher.fetch("http://example.com/page", visited_urls=set())
+
+
+@pytest.mark.asyncio
+async def test_render_js_already_visited_final_url_raises_redirect_error():
+    """If Playwright lands on an already-visited URL, CharlotteRedirectError is raised."""
+    fetcher, _ = _make_playwright_fetcher(
+        url="http://example.com/new",
+        final_url="http://example.com/old",
+    )
+    visited = {"http://example.com/old"}
+    with pytest.raises(CharlotteRedirectError, match="loop"):
+        await fetcher.fetch("http://example.com/new", visited_urls=visited)
+
+
 # ---------------------------------------------------------------------------
 # Happy path — basic fetch
 # ---------------------------------------------------------------------------
