@@ -2,14 +2,15 @@
 Navigation plausibility check for Charlotte (spec §9.3).
 
 Layer 3 of the sanitization pipeline. Applied to validated model output before
-Charlotte acts on it. Detects four categories of suspicious model behaviour
+Charlotte acts on it. Detects five categories of suspicious model behaviour
 that indicate the navigator model may have been influenced by page content:
 
-  1. Off-domain links       — links_to_follow contains out-of-scope hostnames
-  2. Instruction mirroring  — reasoning echoes injection language ("ignore your
-                              goal", "I have been instructed to...", etc.)
-  3. Confidence spike       — high confidence on a page with very thin content
-  4. Zero links / no path   — found=False with an empty links_to_follow
+  1. Off-domain links            — links_to_follow contains out-of-scope hostnames
+  2. Instruction mirroring       — reasoning echoes injection language ("ignore your
+                                   goal", "I have been instructed to...", etc.)
+  3. Confidence spike            — high confidence on a page with very thin content
+  4. Zero links / no path        — found=False with an empty links_to_follow
+  5. High-confidence negative    — found=False with confidence >= 0.9 (contradictory)
 
 Each triggered condition is recorded as a PlausibilityFlag. The engine uses
 PlausibilityResult.passed to decide whether to act on the decision or discard
@@ -40,6 +41,9 @@ THIN_CONTENT_WORD_THRESHOLD: int = 50
 
 # Confidence above this on thin content is flagged as a suspicious spike.
 CONFIDENCE_SPIKE_THRESHOLD: float = 0.8
+
+# found=False with confidence at or above this value is semantically contradictory.
+HIGH_CONFIDENCE_NEGATIVE_THRESHOLD: float = 0.9
 
 # Patterns in reasoning that mirror instruction-following language rather than
 # navigation reasoning. All are matched case-insensitively against the full
@@ -127,7 +131,7 @@ def check_plausibility(
 ) -> PlausibilityResult:
     """Check a validated model decision for signs of prompt injection or drift.
 
-    Evaluates four flag conditions defined in spec §9.3. Any triggered flag
+    Evaluates five flag conditions defined in spec §9.3. Any triggered flag
     causes the result to be marked as failed. The engine discards failed
     decisions and retries or skips the page.
 
@@ -162,6 +166,10 @@ def check_plausibility(
             flags.append(flag)
 
         flag = _check_zero_links_no_path(decision)
+        if flag:
+            flags.append(flag)
+
+        flag = _check_high_confidence_negative(decision)
         if flag:
             flags.append(flag)
 
@@ -255,6 +263,28 @@ def _check_zero_links_no_path(
             detail=(
                 "Model returned found=False with an empty links_to_follow — "
                 "no navigation path available."
+            ),
+        )
+    return None
+
+
+def _check_high_confidence_negative(
+    decision: NavDecision,
+) -> PlausibilityFlag | None:
+    """Flag if the model says found=False but reports very high confidence.
+
+    found=False with confidence >= HIGH_CONFIDENCE_NEGATIVE_THRESHOLD is
+    semantically contradictory: high confidence means the page strongly
+    satisfies the goal, which implies found should be True. This pattern
+    typically indicates model confusion or a misunderstood prompt.
+    """
+    if not decision.found and decision.confidence >= HIGH_CONFIDENCE_NEGATIVE_THRESHOLD:
+        return PlausibilityFlag(
+            name="high_confidence_negative",
+            detail=(
+                f"Model reported found=False with confidence={decision.confidence:.2f} "
+                f"(threshold: {HIGH_CONFIDENCE_NEGATIVE_THRESHOLD}) — "
+                "high confidence contradicts a negative finding."
             ),
         )
     return None

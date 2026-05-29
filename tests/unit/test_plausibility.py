@@ -1,15 +1,16 @@
 """
 Unit tests for the navigation plausibility check (CHAR-009, spec §9.3).
 
-Covers all four flag conditions (off-domain links, instruction-mirroring,
-confidence spike on thin content, zero-links/no-path), the happy path,
-multi-flag cases, and the T-24 injection scenario.
+Covers all five flag conditions (off-domain links, instruction-mirroring,
+confidence spike on thin content, zero-links/no-path, high-confidence negative),
+the happy path, multi-flag cases, and the T-24 injection scenario.
 """
 
 import pytest
 
 from charlotte.core.plausibility import (
     CONFIDENCE_SPIKE_THRESHOLD,
+    HIGH_CONFIDENCE_NEGATIVE_THRESHOLD,
     THIN_CONTENT_WORD_THRESHOLD,
     NavDecision,
     PlausibilityFlag,
@@ -302,6 +303,45 @@ def test_nonempty_links_found_false_does_not_flag():
     d = _decision(found=False, links_to_follow=["https://example.com/next"])
     result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
     assert not any(f.name == "zero_links_no_path" for f in result.flags)
+
+
+# ---------------------------------------------------------------------------
+# Flag 6 — High-confidence negative (found=False, confidence >= threshold)
+# ---------------------------------------------------------------------------
+
+def test_high_confidence_negative_triggers_flag():
+    """found=False with confidence at or above threshold triggers high_confidence_negative."""
+    d = _decision(found=False, confidence=HIGH_CONFIDENCE_NEGATIVE_THRESHOLD,
+                  links_to_follow=["https://example.com/next"])
+    result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
+    assert result.passed is False
+    assert any(f.name == "high_confidence_negative" for f in result.flags)
+
+
+def test_high_confidence_negative_just_below_threshold_passes():
+    """Confidence just below the threshold does not trigger the flag."""
+    d = _decision(found=False, confidence=HIGH_CONFIDENCE_NEGATIVE_THRESHOLD - 0.01,
+                  links_to_follow=["https://example.com/next"])
+    result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
+    assert not any(f.name == "high_confidence_negative" for f in result.flags)
+
+
+def test_found_true_high_confidence_not_flagged():
+    """found=True with high confidence is not contradictory — no flag."""
+    d = _decision(found=True, confidence=HIGH_CONFIDENCE_NEGATIVE_THRESHOLD,
+                  result_url="https://example.com/result", links_to_follow=[])
+    result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
+    assert not any(f.name == "high_confidence_negative" for f in result.flags)
+
+
+def test_high_confidence_negative_flag_detail_includes_confidence():
+    """high_confidence_negative flag detail includes the observed confidence value."""
+    conf = HIGH_CONFIDENCE_NEGATIVE_THRESHOLD + 0.05
+    d = _decision(found=False, confidence=conf,
+                  links_to_follow=["https://example.com/next"])
+    result = check_plausibility(d, _RICH_TEXT, None, _VISITED)
+    flag = next(f for f in result.flags if f.name == "high_confidence_negative")
+    assert f"{conf:.2f}" in flag.detail
 
 
 # ---------------------------------------------------------------------------
