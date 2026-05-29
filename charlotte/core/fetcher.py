@@ -1,10 +1,13 @@
 """
 Page fetcher for Charlotte (spec §8, §8.1, §8.2).
 
-Implements async HTTP fetching with the full timeout policy, redirect policy,
-and a Playwright stub that raises immediately until CHAR-015 is complete.
+Implements async HTTP fetching with the full timeout policy and redirect policy.
+When render_js=True, uses Playwright (headless Chromium) instead of httpx.
+Playwright is an optional dependency — CharlotteConfigError is raised at
+PageFetcher instantiation time if it is not installed.
 
 Public classes: FetchResult, PageFetcher
+Public helpers: _import_playwright (used by engine for early availability check)
 """
 
 from __future__ import annotations
@@ -27,6 +30,24 @@ from charlotte.exceptions import (
 _MAX_REDIRECTS: int = 5
 
 
+def _import_playwright() -> tuple:
+    """Import playwright.async_api, raising CharlotteConfigError if not installed.
+
+    Returns (async_playwright factory, PlaywrightTimeoutError class).
+    Called at PageFetcher init time when render_js=True, and by crawl() for
+    an early availability check before the generator starts.
+    """
+    try:
+        from playwright.async_api import TimeoutError as _PlaywrightTimeout
+        from playwright.async_api import async_playwright
+        return async_playwright, _PlaywrightTimeout
+    except ImportError as exc:
+        raise CharlotteConfigError(
+            "Playwright rendering (render_js=True) requires the playwright extra. "
+            "Install it with: pip install 'charlotte-crawler[playwright]'."
+        ) from exc
+
+
 @dataclass
 class FetchResult:
     """Result of a single page fetch, including redirect history."""
@@ -41,12 +62,17 @@ class FetchResult:
 class PageFetcher:
     """Async HTTP fetcher with Charlotte's timeout and redirect policies.
 
+    When render_js=False (default), uses httpx for all fetching. When
+    render_js=True, uses headless Chromium via Playwright — the playwright
+    package must be installed or CharlotteConfigError is raised at init.
+
     Args:
-        allowed_domains: Hostnames Charlotte is permitted to fetch.
-        connect_timeout: Seconds to establish a TCP connection (spec §8.1).
-        read_timeout: Seconds to receive the complete response body (spec §8.1).
-        render_js: If True, raises immediately — full Playwright support is CHAR-015.
-        polite_delay: Seconds to sleep before each top-level fetch call.
+        allowed_domains:  Hostnames Charlotte is permitted to fetch.
+        connect_timeout:  Seconds to establish a TCP connection (spec §8.1).
+        read_timeout:     Seconds to receive the complete response body (spec §8.1).
+        render_js:        If True, use Playwright instead of httpx.
+        render_timeout:   Seconds to wait for JS to settle after navigation (spec §8.1).
+        polite_delay:     Seconds to sleep before each top-level fetch call.
     """
 
     def __init__(
@@ -55,14 +81,15 @@ class PageFetcher:
         connect_timeout: float = 10.0,
         read_timeout: float = 30.0,
         render_js: bool = False,
+        render_timeout: float = 15.0,
         polite_delay: float = 1.0,
     ) -> None:
+        self._render_js = render_js
+        self._render_timeout = render_timeout
         if render_js:
-            raise CharlotteConfigError(
-                "Playwright rendering (render_js=True) requires the playwright extra. "
-                "Install it with: pip install 'charlotte-crawler[playwright]'. "
-                "Full Playwright support arrives in a future release."
-            )
+            factory, timeout_err = _import_playwright()
+            self._playwright_factory = factory
+            self._playwright_timeout_error = timeout_err
         self._allowed_domains: frozenset[str] = frozenset(d.lower() for d in allowed_domains)
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
@@ -86,13 +113,17 @@ class PageFetcher:
             FetchResult with the final URL, HTML, status code, timing, and redirect chain.
 
         Raises:
-            CharlotteTimeoutError: Connect or read timeout.
-            CharlotteNetworkError: DNS failure, connection refused, or other network error.
+            CharlotteTimeoutError: Connect, read, or render timeout.
+            CharlotteNetworkError: DNS failure, connection refused, Playwright error,
+                                   or other network error.
             CharlotteRedirectError: Redirect chain exceeds 5 hops, crosses into a
-                                    disallowed domain, or forms a loop.
+                                    disallowed domain, or forms a loop (httpx path only).
             CharlotteConfigError: Malformed URL.
         """
         await asyncio.sleep(self._polite_delay)
+
+        if self._render_js:
+            return await self._fetch_with_playwright(url, visited_urls=visited_urls)
 
         timeout = httpx.Timeout(
             connect=self._connect_timeout,
@@ -177,3 +208,65 @@ class PageFetcher:
 
                 chain_seen.add(destination)
                 current_url = destination
+
+    async def _fetch_with_playwright(
+        self, url: str, *, visited_urls: set[str]
+    ) -> FetchResult:
+        """Fetch a JS-rendered page using headless Chromium via Playwright.
+
+        Launches a fresh browser per call (no cross-request session state).
+        Waits for network activity to settle before capturing the DOM.
+        Redirects are followed by Playwright automatically; the final URL is
+        validated against allowed_domains and visited_urls after navigation.
+        """
+        start = time.monotonic()
+        try:
+            async with self._playwright_factory() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                try:
+                    page = await browser.new_page()
+                    response = await page.goto(
+                        url,
+                        wait_until="networkidle",
+                        timeout=self._render_timeout * 1000,
+                    )
+                    html = await page.content()
+                    final_url = page.url
+                    status_code = response.status if response is not None else 200
+                finally:
+                    await browser.close()
+        except self._playwright_timeout_error as exc:
+            raise CharlotteTimeoutError(
+                f"Render timeout fetching {url!r}"
+            ) from exc
+        except (CharlotteTimeoutError, CharlotteNetworkError, CharlotteRedirectError):
+            raise
+        except Exception as exc:
+            raise CharlotteNetworkError(
+                f"Playwright error fetching {url!r}: {type(exc).__name__}"
+            ) from exc
+
+        # Post-navigation domain and loop checks — mirrors the httpx redirect policy.
+        if not self._is_allowed(final_url):
+            raise CharlotteRedirectError(
+                f"Redirect from {url!r} to {final_url!r} crosses into "
+                f"disallowed domain {self._hostname(final_url)!r}"
+            )
+        try:
+            norm_final = normalize_url(final_url)
+        except CharlotteConfigError as exc:
+            raise CharlotteRedirectError(
+                f"Redirect destination {final_url!r} is not a valid URL: {exc}"
+            ) from exc
+        if norm_final in visited_urls:
+            raise CharlotteRedirectError(
+                f"Redirect loop detected: {final_url!r} already visited"
+            )
+
+        return FetchResult(
+            url=final_url,
+            html=html,
+            status_code=status_code,
+            fetch_ms=int((time.monotonic() - start) * 1000),
+            redirect_chain=[],  # Playwright follows redirects internally
+        )
