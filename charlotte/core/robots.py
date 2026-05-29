@@ -37,6 +37,7 @@ from charlotte.exceptions import CharlotteInternalError, RobotsError
 
 _CHARLOTTE_UA: str = "CareNavigator"
 _WILDCARD_UA: str = "*"
+_HTTP_USER_AGENT: str = "CareNavigator/0.1"
 _DEFAULT_CONNECT_TIMEOUT: float = 10.0
 _DEFAULT_READ_TIMEOUT: float = 10.0
 
@@ -135,7 +136,10 @@ class RobotsHandler:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                headers={"User-Agent": _HTTP_USER_AGENT},
+            ) as client:
                 response = await client.get(robots_url)
         except httpx.TimeoutException:
             return _CachedEntry(
@@ -154,14 +158,19 @@ class RobotsHandler:
                 ),
             )
 
-        if response.status_code == 404:
+        status = response.status_code
+
+        # RFC 9309 §2.3.1: any 4xx except 429 means the robots.txt file is
+        # inaccessible — treat as no restrictions.  429 (Too Many Requests)
+        # signals rate-limiting, so we conservatively block the domain.
+        if 400 <= status < 500 and status != 429:
             return _CachedEntry(blocked=False)
 
-        if response.status_code != 200:
+        if status != 200:
             return _CachedEntry(
                 blocked=True,
                 reason=(
-                    f"robots.txt for {hostname!r} returned HTTP {response.status_code}"
+                    f"robots.txt for {hostname!r} returned HTTP {status}"
                     " — treating domain as uncrawlable"
                 ),
             )

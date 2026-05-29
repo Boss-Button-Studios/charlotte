@@ -28,6 +28,7 @@ from charlotte.exceptions import (
 )
 
 _MAX_REDIRECTS: int = 5
+_HTTP_USER_AGENT: str = "CareNavigator/0.1"
 
 
 def _import_playwright() -> tuple:
@@ -138,7 +139,11 @@ class PageFetcher:
         current_url = url
         start = time.monotonic()
 
-        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=timeout,
+            headers={"User-Agent": _HTTP_USER_AGENT},
+        ) as client:
             while True:
                 try:
                     response = await client.get(current_url)
