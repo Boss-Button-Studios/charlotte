@@ -35,6 +35,7 @@ _GOAL = "find the content"
 # ---------------------------------------------------------------------------
 
 async def test_t05_playwright_renders_page():
+    """T-05: render_js=True fetches the page via headless Chromium (Playwright)."""
     fake = FetchResult(url=_START, html=page(), status_code=200, fetch_ms=50)
 
     with (
@@ -60,6 +61,7 @@ async def test_t05_playwright_renders_page():
 
 @respx.mock
 async def test_t06_robots_disallows_crawl():
+    """T-06: robots.txt Disallow:/ blocks the crawl; no pages fetched."""
     respx.get(_ROBOTS).mock(return_value=httpx.Response(
         200, text="User-agent: *\nDisallow: /\n"
     ))
@@ -85,6 +87,7 @@ async def test_t06_robots_disallows_crawl():
 
 @respx.mock
 async def test_t07_robots_404_means_no_restrictions():
+    """T-07: robots.txt 404 is treated as no restrictions; crawl proceeds normally."""
     respx.get(_ROBOTS).mock(return_value=httpx.Response(404))
     respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
 
@@ -104,6 +107,7 @@ async def test_t07_robots_404_means_no_restrictions():
 
 @respx.mock
 async def test_t08_robots_timeout_blocks_crawl():
+    """T-08: robots.txt connect timeout treats the domain as uncrawlable."""
     respx.get(_ROBOTS).mock(side_effect=httpx.ConnectTimeout("timed out"))
 
     events = await collect(crawl(

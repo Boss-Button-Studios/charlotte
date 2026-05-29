@@ -29,6 +29,7 @@ _GOAL = "find the target"
 
 @respx.mock
 async def test_t01_goal_found_on_first_page():
+    """T-01: Goal found immediately on the start page — happy path, single hop."""
     respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
 
     result = await crawl(
@@ -50,6 +51,7 @@ async def test_t01_goal_found_on_first_page():
 
 @respx.mock
 async def test_t02_goal_found_after_one_hop():
+    """T-02: Goal found on a linked page — happy path, two hops."""
     target = f"{_BASE}/target"
     respx.get(_START).mock(return_value=httpx.Response(
         200, text=page(links=[("Target", target)])
@@ -77,6 +79,7 @@ async def test_t02_goal_found_after_one_hop():
 
 @respx.mock
 async def test_t03_budget_exhausted_max_pages():
+    """T-03: Crawl stops at max_pages; BudgetExhausted event emitted."""
     page_a = f"{_BASE}/a"
     page_b = f"{_BASE}/b"
     respx.get(_START).mock(return_value=httpx.Response(
@@ -123,6 +126,7 @@ async def test_t03_budget_exhausted_max_pages():
 
 @respx.mock
 async def test_t04_budget_exhausted_max_depth():
+    """T-04: Links beyond max_depth are never enqueued; budget_exhausted=True."""
     deep = f"{_BASE}/deep"
     deeper = f"{_BASE}/deeper"
     respx.get(_START).mock(return_value=httpx.Response(

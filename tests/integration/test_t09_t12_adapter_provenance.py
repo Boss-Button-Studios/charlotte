@@ -32,6 +32,7 @@ _GOAL = "find the target"
 
 @respx.mock
 async def test_t09_schema_retry_succeeds_on_second_attempt():
+    """T-09: Invalid schema on first call; schema-hint retry on second call succeeds."""
     respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
 
     schema_hints_received: list[str | None] = []
@@ -59,6 +60,7 @@ async def test_t09_schema_retry_succeeds_on_second_attempt():
 
 @respx.mock
 async def test_t10_both_attempts_fail_page_skipped():
+    """T-10: Both schema-validation attempts return invalid output; page is skipped."""
     respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
 
     async def _always_bad(*, schema_hint: str | None = None, **_kw: Any) -> dict:
@@ -87,6 +89,7 @@ async def test_t10_both_attempts_fail_page_skipped():
 
 @respx.mock
 async def test_t11_hallucinated_result_url_rejected_by_provenance():
+    """T-11: Provenance check rejects result_url not present on page; goal not recorded."""
     next_url = f"{_BASE}/next"
     hallucinated = f"{_BASE}/not-on-this-page"
 
@@ -124,6 +127,7 @@ async def test_t11_hallucinated_result_url_rejected_by_provenance():
 
 @respx.mock
 async def test_t12_off_domain_link_silently_dropped():
+    """T-12: Off-domain URL in links_to_follow is dropped by domain filter; never fetched."""
     external = "http://other-domain.com/page"
 
     respx.get(_START).mock(return_value=httpx.Response(

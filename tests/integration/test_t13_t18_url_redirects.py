@@ -33,6 +33,7 @@ _GOAL = "find the target"
 
 @respx.mock
 async def test_t13_fragment_url_treated_as_already_visited():
+    """T-13: Fragment variants of the same URL are deduplicated via normalization."""
     target = f"{_BASE}/page"
     fragment = f"{_BASE}/page#section"
 
@@ -67,6 +68,7 @@ async def test_t13_fragment_url_treated_as_already_visited():
 
 @respx.mock
 async def test_t14_equivalent_query_param_order_deduplicated():
+    """T-14: Query params in different order normalize to the same URL; second visit skipped."""
     canonical = f"{_BASE}/search?a=1&b=2"
     alternate = f"{_BASE}/search?b=2&a=1"
 
@@ -97,6 +99,7 @@ async def test_t14_equivalent_query_param_order_deduplicated():
 
 @respx.mock
 async def test_t15_redirect_within_allowed_domain_followed():
+    """T-15: 301 redirect within allowed_domains is followed; goal found at final URL."""
     old = f"{_BASE}/old"
     new = f"{_BASE}/new"
 
@@ -128,6 +131,7 @@ async def test_t15_redirect_within_allowed_domain_followed():
 
 @respx.mock
 async def test_t16_redirect_to_disallowed_domain_skips_page():
+    """T-16: Redirect to a domain outside allowed_domains raises CharlotteRedirectError; page skipped."""
     offsite = f"{_BASE}/offsite"
     external = "http://other-domain.com/page"
 
@@ -162,6 +166,7 @@ async def test_t16_redirect_to_disallowed_domain_skips_page():
 
 @respx.mock
 async def test_t17_redirect_loop_detected():
+    """T-17: A→B→A redirect cycle is detected and raises CharlotteRedirectError; page skipped."""
     loop_a = f"{_BASE}/loop-a"
     loop_b = f"{_BASE}/loop-b"
 
@@ -198,6 +203,7 @@ async def test_t17_redirect_loop_detected():
 
 @respx.mock
 async def test_t18_redirect_chain_too_long():
+    """T-18: Redirect chain exceeding 5 hops raises CharlotteRedirectError; page skipped."""
     hop0 = f"{_BASE}/hop0"
     hops = [f"{_BASE}/hop{i}" for i in range(7)]
 

@@ -33,6 +33,7 @@ _GOAL = "find the target"
 
 @respx.mock
 async def test_t19_connect_timeout_skips_page():
+    """T-19: TCP connect timeout emits PageSkipped; crawl ends gracefully."""
     respx.get(_START).mock(side_effect=httpx.ConnectTimeout("timed out"))
 
     events = await collect(crawl(
@@ -56,6 +57,7 @@ async def test_t19_connect_timeout_skips_page():
 
 @respx.mock
 async def test_t20_read_timeout_skips_page():
+    """T-20: HTTP read timeout emits PageSkipped(CharlotteTimeoutError); crawl ends gracefully."""
     respx.get(_START).mock(side_effect=httpx.ReadTimeout("timed out"))
 
     events = await collect(crawl(
@@ -87,6 +89,7 @@ async def test_t20_read_timeout_skips_page():
 
 @respx.mock
 async def test_t21_model_timeout_skips_page():
+    """T-21: Model adapter raises CharlotteTimeoutError; wrapped as AdapterOutputError; page skipped."""
     respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
 
     call_count = 0
@@ -116,6 +119,7 @@ async def test_t21_model_timeout_skips_page():
 
 @respx.mock
 async def test_t22_find_link_collects_all_matches():
+    """T-22: find_link() with max_results=None collects every matching URL from all visited pages."""
     url_a = f"{_BASE}/a"
     url_b = f"{_BASE}/b"
 
