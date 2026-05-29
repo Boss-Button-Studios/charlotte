@@ -9,7 +9,7 @@ T-08  robots.txt unreachable (timeout) — treated as uncrawlable
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -38,7 +38,8 @@ async def test_t05_playwright_renders_page():
     fake = FetchResult(url=_START, html=page(), status_code=200, fetch_ms=50)
 
     with (
-        patch("charlotte.core.engine._import_playwright"),
+        patch("charlotte.core.engine._import_playwright"),                              # eager check in crawl()
+        patch("charlotte.core.fetcher._import_playwright", return_value=(MagicMock(), Exception)),  # PageFetcher.__init__
         patch.object(PageFetcher, "_fetch_with_playwright", new=AsyncMock(return_value=fake)),
     ):
         result = await crawl(
