@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
-from charlotte.core.fetcher import PageFetcher
+from charlotte.core.fetcher import PageFetcher, _import_playwright
 from charlotte.core.normalizer import normalize_url
 from charlotte.core.plausibility import NavDecision, check_plausibility
 from charlotte.core.provenance import check_provenance
@@ -69,6 +69,7 @@ def crawl(
     respect_robots: bool = True,
     connect_timeout: float = 10.0,
     read_timeout: float = 30.0,
+    render_timeout: float = 15.0,
     default_delay: float = 1.0,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Navigate toward *goal* starting from *start_url*.
@@ -82,7 +83,8 @@ def crawl(
         max_depth:            Maximum link-hops from start_url.
         max_results:          Stop after this many confirmed results; None = collect all.
         confidence_threshold: Minimum model confidence to record a result (0–1).
-        render_js:            Not supported yet — raises CharlotteConfigError.
+        render_js:            Use Playwright (headless Chromium) to render pages.
+                              Raises CharlotteConfigError if playwright is not installed.
         allowed_domains:      Hostnames Charlotte may visit; defaults to start_url domain.
         return_content:       Include sanitized page text in CrawlResult.content.
         navigation_hint:      Extra context passed to the model alongside the goal.
@@ -91,6 +93,7 @@ def crawl(
         respect_robots:       Fetch and obey robots.txt before crawling.
         connect_timeout:      TCP connection timeout for HTTP requests (seconds).
         read_timeout:         Response body read timeout (seconds).
+        render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
         default_delay:        Floor for the polite inter-request delay (seconds).
 
     Returns:
@@ -98,14 +101,13 @@ def crawl(
         Coroutine[CrawlResult] when stream=False — use `await crawl(...)`.
 
     Raises:
-        CharlotteConfigError: Invalid configuration (unsupported render_js,
+        CharlotteConfigError: Invalid configuration (playwright not installed,
                               invalid start_url, or no model provided).
     """
     if render_js:
-        raise CharlotteConfigError(
-            "render_js=True requires Playwright (CHAR-015). "
-            "Install it with: pip install 'charlotte-crawler[playwright]'."
-        )
+        # Check availability before the generator starts — spec §8 requires the
+        # error to surface immediately, not on the first iteration.
+        _import_playwright()
     if model is None:
         raise CharlotteConfigError(
             "No model adapter provided. Pass model=LocalAdapter() or model=GroqAdapter()."
@@ -141,8 +143,10 @@ def crawl(
         return_content=return_content,
         navigation_hint=navigation_hint,
         respect_robots=respect_robots,
+        render_js=render_js,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
+        render_timeout=render_timeout,
         default_delay=default_delay,
     )
 
@@ -175,8 +179,10 @@ async def _crawl_core(
     return_content: bool,
     navigation_hint: "str | None",
     respect_robots: bool,
+    render_js: bool,
     connect_timeout: float,
     read_timeout: float,
+    render_timeout: float,
     default_delay: float,
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
@@ -207,8 +213,10 @@ async def _crawl_core(
 
     fetcher = PageFetcher(
         allowed_domains=set(allowed_domains),
+        render_js=render_js,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
+        render_timeout=render_timeout,
         polite_delay=polite_delay,
     )
 

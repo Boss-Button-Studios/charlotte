@@ -56,6 +56,7 @@ def find_link(
     respect_robots: bool = True,
     connect_timeout: float = 10.0,
     read_timeout: float = 30.0,
+    render_timeout: float = 15.0,
     default_delay: float = 1.0,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
@@ -72,7 +73,8 @@ def find_link(
         max_pages:            Hard ceiling on total pages fetched.
         max_depth:            Maximum link-hops from start_url.
         confidence_threshold: Minimum model confidence to record a result (0–1).
-        render_js:            Not supported yet — raises CharlotteConfigError.
+        render_js:            Use Playwright (headless Chromium) to render pages.
+                              Raises CharlotteConfigError if playwright not installed.
         allowed_domains:      Hostnames Charlotte may visit; defaults to start_url domain.
         navigation_hint:      Extra context passed to the model alongside the goal.
         stream:               True → return AsyncGenerator of events.
@@ -80,6 +82,7 @@ def find_link(
         respect_robots:       Fetch and obey robots.txt before crawling.
         connect_timeout:      TCP connection timeout for HTTP requests (seconds).
         read_timeout:         Response body read timeout (seconds).
+        render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
         default_delay:        Floor for the polite inter-request delay (seconds).
 
     Returns:
@@ -103,6 +106,7 @@ def find_link(
         respect_robots=respect_robots,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
+        render_timeout=render_timeout,
         default_delay=default_delay,
     )
 

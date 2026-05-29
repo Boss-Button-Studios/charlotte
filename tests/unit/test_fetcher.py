@@ -5,7 +5,7 @@ Covers T-15 through T-20 from the test matrix, plus unit tests for each
 component of the timeout policy, redirect policy, and Playwright stub.
 """
 
-from unittest.mock import PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import httpx
 import pytest
@@ -30,16 +30,120 @@ def _fetcher(**kwargs) -> PageFetcher:
 
 
 # ---------------------------------------------------------------------------
-# Playwright stub
+# T-26 — Playwright not installed → CharlotteConfigError immediately
 # ---------------------------------------------------------------------------
 
-def test_render_js_true_raises_at_instantiation():
-    with pytest.raises(CharlotteConfigError, match="playwright"):
-        PageFetcher(allowed_domains={"example.com"}, render_js=True)
+def test_t26_playwright_not_installed_raises_config_error():
+    """T-26: CharlotteConfigError is raised at instantiation when playwright is absent."""
+    with patch(
+        "charlotte.core.fetcher._import_playwright",
+        side_effect=CharlotteConfigError("playwright"),
+    ):
+        with pytest.raises(CharlotteConfigError, match="playwright"):
+            PageFetcher(allowed_domains={"example.com"}, render_js=True)
 
 
-def test_render_js_false_does_not_raise():
+def test_render_js_false_does_not_require_playwright():
+    """render_js=False never imports playwright — no error even if absent."""
     PageFetcher(allowed_domains={"example.com"}, render_js=False)
+
+
+# ---------------------------------------------------------------------------
+# T-05 — Playwright render_js=True path (mocked browser)
+# ---------------------------------------------------------------------------
+
+def _make_playwright_fetcher(
+    *,
+    url: str = "http://example.com/",
+    html: str = "<html><body>JS content</body></html>",
+    status: int = 200,
+    final_url: str | None = None,
+    side_effect: Exception | None = None,
+) -> tuple["PageFetcher", MagicMock]:
+    """Build a PageFetcher with a mocked playwright factory and return (fetcher, mock_pw)."""
+    mock_response = MagicMock()
+    mock_response.status = status
+
+    mock_page = MagicMock()
+    mock_page.url = final_url or url
+    mock_page.content = AsyncMock(return_value=html)
+    if side_effect:
+        mock_page.goto = AsyncMock(side_effect=side_effect)
+    else:
+        mock_page.goto = AsyncMock(return_value=mock_response)
+
+    mock_browser = MagicMock()
+    mock_browser.new_page = AsyncMock(return_value=mock_page)
+    mock_browser.close = AsyncMock()
+
+    mock_pw = MagicMock()
+    mock_pw.chromium.launch = AsyncMock(return_value=mock_browser)
+
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_pw)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_factory = MagicMock(return_value=mock_cm)
+
+    with patch(
+        "charlotte.core.fetcher._import_playwright",
+        return_value=(mock_factory, TimeoutError),
+    ):
+        fetcher = PageFetcher(
+            allowed_domains={"example.com"},
+            render_js=True,
+            polite_delay=0.0,
+            render_timeout=5.0,
+        )
+
+    return fetcher, mock_pw
+
+
+@pytest.mark.asyncio
+async def test_t05_render_js_returns_fetch_result():
+    """T-05: render_js=True fetches via Playwright and returns a valid FetchResult."""
+    fetcher, _ = _make_playwright_fetcher(html="<html><body>JS page</body></html>")
+    result = await fetcher.fetch("http://example.com/", visited_urls=set())
+    assert isinstance(result, FetchResult)
+    assert result.html == "<html><body>JS page</body></html>"
+    assert result.status_code == 200
+    assert result.url == "http://example.com/"
+    assert result.redirect_chain == []
+
+
+@pytest.mark.asyncio
+async def test_render_js_captures_final_url_after_redirect():
+    """Playwright follows redirects internally; final_url is captured from page.url."""
+    fetcher, _ = _make_playwright_fetcher(
+        url="http://example.com/old",
+        final_url="http://example.com/new",
+    )
+    result = await fetcher.fetch("http://example.com/old", visited_urls=set())
+    assert result.url == "http://example.com/new"
+    assert result.redirect_chain == []  # not tracked on Playwright path
+
+
+@pytest.mark.asyncio
+async def test_render_js_fetch_ms_is_non_negative():
+    fetcher, _ = _make_playwright_fetcher()
+    result = await fetcher.fetch("http://example.com/", visited_urls=set())
+    assert result.fetch_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_render_js_timeout_raises_charlotte_timeout_error():
+    """Playwright TimeoutError is converted to CharlotteTimeoutError."""
+    fetcher, _ = _make_playwright_fetcher(side_effect=TimeoutError("timed out"))
+    with pytest.raises(CharlotteTimeoutError, match="Render timeout"):
+        await fetcher.fetch("http://example.com/", visited_urls=set())
+
+
+@pytest.mark.asyncio
+async def test_render_js_unexpected_error_raises_network_error():
+    """Unexpected Playwright errors are wrapped as CharlotteNetworkError."""
+    fetcher, _ = _make_playwright_fetcher(side_effect=RuntimeError("browser crashed"))
+    with pytest.raises(CharlotteNetworkError, match="Playwright error"):
+        await fetcher.fetch("http://example.com/", visited_urls=set())
 
 
 # ---------------------------------------------------------------------------

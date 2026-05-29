@@ -16,6 +16,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from unittest.mock import patch
 
 from charlotte.core.find_link import _to_link_result, find_link
 from charlotte.exceptions import CharlotteConfigError
@@ -195,10 +196,14 @@ def test_no_model_raises_config_error():
         find_link(_START, _GOAL, model=None)
 
 
-def test_render_js_raises_config_error():
+def test_render_js_raises_config_error_when_playwright_not_installed():
     async def _m(**_): return {}
-    with pytest.raises(CharlotteConfigError, match="render_js"):
-        find_link(_START, _GOAL, model=_m, render_js=True)
+    with patch(
+        "charlotte.core.engine._import_playwright",
+        side_effect=CharlotteConfigError("playwright"),
+    ):
+        with pytest.raises(CharlotteConfigError, match="playwright"):
+            find_link(_START, _GOAL, model=_m, render_js=True)
 
 
 # ---------------------------------------------------------------------------
