@@ -468,6 +468,16 @@ async def test_think_tag_multiline_stripped():
 
 
 @respx.mock
+async def test_lone_close_think_tag_stripped():
+    """A lone </think> separator (opening tag absent from content) is stripped."""
+    raw = "Some reasoning text here.</think>\n" + json.dumps(_VALID_NAV_DICT)
+    body = {"choices": [{"message": {"content": raw}}]}
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
+    result = await LocalAdapter()(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
+@respx.mock
 async def test_no_think_tag_still_works():
     """A normal response with no think tags is parsed unchanged."""
     respx.post(_ENDPOINT).mock(return_value=_ok_response())

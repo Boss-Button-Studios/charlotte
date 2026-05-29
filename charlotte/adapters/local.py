@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 # Matches <think>...</think> or <thinking>...</thinking> blocks emitted by
 # reasoning models (deepseek-r1, QwQ, etc.) before their JSON answer.
 _THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+# Some serving paths omit the opening tag from message.content (it lives in the
+# chat template instead), leaving a lone </think> separator. Strip everything
+# before it as reasoning preamble.
+_LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3:8b"
@@ -234,8 +238,8 @@ class LocalAdapter:
         try:
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"] or ""
-            # Strip reasoning-model thinking blocks before JSON parsing.
-            content = _THINK_TAG_RE.sub("", raw_content).strip()
+            content = _THINK_TAG_RE.sub("", raw_content)
+            content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
             return json.loads(content)
         except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the model output. See §18.

@@ -23,6 +23,7 @@ from charlotte.exceptions import AdapterOutputError, CharlotteConfigError
 logger = logging.getLogger(__name__)
 
 _THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+_LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _DEFAULT_MODEL = "llama-3.1-8b-instant"
 
@@ -167,7 +168,8 @@ class GroqAdapter:
                 response_format={"type": "json_object"},
             )
             raw_content = response.choices[0].message.content or ""
-            content = _THINK_TAG_RE.sub("", raw_content).strip()
+            content = _THINK_TAG_RE.sub("", raw_content)
+            content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
             return json.loads(content)
         except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the full model output,

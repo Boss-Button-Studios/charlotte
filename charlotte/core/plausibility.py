@@ -96,7 +96,7 @@ class PlausibilityFlag:
     """A single triggered plausibility condition.
 
     Attributes:
-        name:   Short machine-readable identifier (e.g. "off_domain_link").
+        name:   Short machine-readable identifier (e.g. "instruction_mirroring").
         detail: Human-readable explanation suitable for the visit log.
     """
 

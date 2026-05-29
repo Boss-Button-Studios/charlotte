@@ -286,6 +286,9 @@ async def _crawl_core(
 
         # Provenance check — current page URL is also "observed" by the model,
         # so it is valid as a result_url even if not present as a link on the page.
+        # extracted_link_urls includes off-domain links; allowed_domains restricts
+        # navigation (enqueueing) only — CrawlResult.result_urls may contain
+        # off-domain hosts when the goal is to find an external URL.
         extracted_link_urls = [page.url] + [link["url"] for link in extracted.links]
         prov = check_provenance(
             found=output.found,

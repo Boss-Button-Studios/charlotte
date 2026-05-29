@@ -552,6 +552,19 @@ async def test_groq_think_tag_multiline_stripped(monkeypatch):
     assert result["found"] is False
 
 
+async def test_groq_lone_close_think_tag_stripped(monkeypatch):
+    """A lone </think> separator (opening tag absent from content) is stripped."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    raw = "Some reasoning text here.</think>\n" + json.dumps(_VALID_NOT_FOUND)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(raw)
+    )
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is False
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — prompt construction
 # ---------------------------------------------------------------------------
