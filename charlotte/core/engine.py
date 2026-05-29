@@ -312,7 +312,8 @@ async def _crawl_core(
         )
         if not plaus.passed:
             reason = "; ".join(f.detail for f in plaus.flags)
-            yield PageSkipped(url=page.url, reason=f"Plausibility: {reason}", error_type=None)
+            model_summary = f"model: found={output.found}, conf={output.confidence:.2f}"
+            yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
             continue
 
         visit_log.append(VisitLogEntry(

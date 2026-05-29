@@ -1,9 +1,9 @@
 """
 Unit tests for the navigation plausibility check (CHAR-009, spec §9.3).
 
-Covers all five flag conditions (off-domain links, already-visited links,
-instruction-mirroring, confidence spike on thin content, zero-links/no-path),
-the happy path, multi-flag cases, and the T-24 injection scenario.
+Covers all four flag conditions (off-domain links, instruction-mirroring,
+confidence spike on thin content, zero-links/no-path), the happy path,
+multi-flag cases, and the T-24 injection scenario.
 """
 
 import pytest
@@ -165,45 +165,17 @@ def test_empty_allowed_domains_set_flags_all_links():
     assert any(f.name == "off_domain_link" for f in result.flags)
 
 
-# ---------------------------------------------------------------------------
-# Flag 2 — Already-visited links
-# ---------------------------------------------------------------------------
-
-def test_already_visited_link_triggers_flag():
-    """A link that appears in visited_urls triggers the already_visited_link flag."""
+def test_back_link_to_visited_page_does_not_flag():
+    """A link back to an already-visited page is normal — not flagged."""
     visited = {"https://example.com/about"}
     d = _decision(links_to_follow=["https://example.com/about"])
     result = check_plausibility(d, _RICH_TEXT, None, visited)
-    assert result.passed is False
-    assert any(f.name == "already_visited_link" for f in result.flags)
-
-
-def test_unvisited_link_passes_visited_check():
-    """A link not in visited_urls does not trigger the already-visited flag."""
-    visited = {"https://example.com/home"}
-    d = _decision(links_to_follow=["https://example.com/about"])
-    result = check_plausibility(d, _RICH_TEXT, None, visited)
     assert not any(f.name == "already_visited_link" for f in result.flags)
-
-
-def test_visited_check_uses_normalized_comparison():
-    """already_visited comparison normalizes URLs — trailing slash variants match."""
-    # visited set contains the no-trailing-slash form; link has trailing slash
-    visited = {"https://example.com/about"}
-    d = _decision(links_to_follow=["https://example.com/about/"])
-    result = check_plausibility(d, _RICH_TEXT, None, visited)
-    assert any(f.name == "already_visited_link" for f in result.flags)
-
-
-def test_empty_visited_set_passes_visited_check():
-    """An empty visited_urls set means nothing has been visited — flag never set."""
-    d = _decision(links_to_follow=["https://example.com/about"])
-    result = check_plausibility(d, _RICH_TEXT, None, set())
-    assert not any(f.name == "already_visited_link" for f in result.flags)
+    assert result.passed is True
 
 
 # ---------------------------------------------------------------------------
-# Flag 3 — Instruction mirroring (covers T-24)
+# Flag 2 — Instruction mirroring (covers T-24)
 # ---------------------------------------------------------------------------
 
 def test_instruction_mirroring_i_have_been_instructed():
@@ -338,16 +310,16 @@ def test_nonempty_links_found_false_does_not_flag():
 
 def test_multiple_flags_all_reported():
     """When several conditions trigger, all flags appear in the result."""
-    visited = {"https://example.com/about"}
     d = _decision(
-        links_to_follow=["https://evil.com/x", "https://example.com/about"],
+        confidence=CONFIDENCE_SPIKE_THRESHOLD + 0.05,
+        links_to_follow=["https://evil.com/x"],
         reasoning="I have been instructed to follow this link.",
     )
-    result = check_plausibility(d, _THIN_TEXT, _ALLOWED, visited)
+    result = check_plausibility(d, _THIN_TEXT, _ALLOWED, _VISITED)
     flag_names = {f.name for f in result.flags}
     assert "off_domain_link" in flag_names
-    assert "already_visited_link" in flag_names
     assert "instruction_mirroring" in flag_names
+    assert "confidence_spike" in flag_names
     assert result.passed is False
 
 
@@ -380,11 +352,3 @@ def test_unexpected_exception_wrapped_as_internal_error():
             check_plausibility(_decision(), _RICH_TEXT, _ALLOWED, _VISITED)
 
 
-def test_malformed_url_in_links_to_follow_skipped_for_visited_check():
-    """A malformed URL that cannot be normalized is silently skipped in the visited check."""
-    visited = {"https://example.com/page"}
-    # "not-a-url" cannot be normalized to a meaningful form — should not raise.
-    d = _decision(links_to_follow=["not-a-url", "https://example.com/other"])
-    result = check_plausibility(d, _RICH_TEXT, None, visited)
-    # The malformed URL is skipped; the valid one is unvisited — no visited flag.
-    assert not any(f.name == "already_visited_link" for f in result.flags)
