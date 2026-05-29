@@ -165,19 +165,19 @@ class GroqAdapter:
             )
             raw_content = response.choices[0].message.content or ""
             return json.loads(raw_content)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             # Suppress chain — JSONDecodeError.doc contains the full model output,
             # which may include sensitive page content. See §18.
-            logger.debug("Groq response JSON decode failed", exc_info=True)
+            logger.debug("Groq response JSON decode failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Groq response was not valid JSON"
             ) from None
         except AdapterOutputError:
             raise
-        except Exception:
+        except Exception as exc:
             # Suppress chain — groq SDK exceptions may contain API keys or
-            # provider response bodies. See §6.5, §18.
-            logger.debug("Groq API call failed", exc_info=True)
+            # provider response bodies. Log type only, never exc_info. See §6.5, §18.
+            logger.debug("Groq API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Groq API call failed — see logs for detail"
             ) from None
