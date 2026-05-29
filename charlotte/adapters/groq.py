@@ -34,6 +34,7 @@ You must respond with a valid JSON object containing exactly these five fields:
 
 Rules:
 - If the current page IS what the goal describes, set found=true and result_url to the current page URL. Do not keep searching when you are already on the answer.
+- If the goal is to find a link or URL, and a matching link is visible on this page, set found=true and result_url to that link — you do not need to visit it first.
 - "confidence" measures how well this page satisfies the goal — not confidence in your reasoning. A value near 1.0 means this page strongly satisfies the goal; near 0.0 means it does not.
 - "result_url" must be a URL from this page when found=true, and null when found=false.
 - "links_to_follow" may be non-empty even when found=true if more results may exist.
