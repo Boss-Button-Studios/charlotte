@@ -1,6 +1,6 @@
 # Charlotte — Technical Specification
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Ready for development
 **Org:** Boss Button Studios
 **Repo:** `Boss-Button-Studios/charlotte` (standalone — no consuming project dependencies)
@@ -27,6 +27,7 @@ The name is intentional.
 - Impose strict cost and safety budgets (max pages, max depth) to prevent runaway crawls
 - Handle both plain HTTP and JavaScript-rendered pages
 - Return found URLs and optionally the extracted content
+- For factual lookup goals, return the extracted answer text alongside the result URL
 - Support single-result and multi-result modes
 - Expose both a full navigation interface (`crawl()`) and a lightweight link-discovery interface (`find_link()`)
 - Be trivially importable as a dependency in other Python projects
@@ -214,8 +215,11 @@ The model must return a structured response with these fields:
 | `result_url` | string or null | URL of the found result, if `found` is true |
 | `links_to_follow` | list of URLs | Ordered list of links worth following, best first. Empty if `found` is true and `max_results` is 1. |
 | `reasoning` | string | Brief explanation of the decision. Used for logging and debugging. |
+| `answer` | string or null | *(v1.1)* The extracted answer when `found` is true and the goal asks for a specific fact — a phone number, address, email, price, hours, name, or similar. The model copies the value verbatim from the visible page text. Null when `found` is false, or when the goal is a URL or navigation goal rather than a fact retrieval. |
 
 When `max_results` is not 1, the model may return both `found: true` and a non-empty `links_to_follow` — indicating it found a result on this page and believes more results may be reachable from it.
+
+**Factual lookup vs. navigation goal.** The `answer` field distinguishes two goal shapes: *fact retrieval* ("Find the number for the emergency room", "Find the head of admissions' email address") and *navigation* ("Find the academic calendar page", "Find the most recent annual report PDF"). For fact retrieval goals the model copies the specific value verbatim from the page — do not paraphrase, do not summarize. For navigation goals `answer` is null. The system prompt communicates this distinction explicitly.
 
 ### 6.3 Adapter Contract
 
@@ -286,17 +290,21 @@ confidence:       float            — required, must be 0.0–1.0 inclusive
 result_url:       string or null   — required when found=True, must be null when found=False
 links_to_follow:  list of strings  — required, may be empty, each item must be a string
 reasoning:        string           — required, must be non-empty
+answer:           string or null   — optional (v1.1); when present and non-null, must be non-empty
 ```
 
 **Validation rules:**
 
-- All five fields must be present. Missing fields are not defaulted — the response is rejected.
+- All five required fields must be present. Missing fields are not defaulted — the response is rejected.
 - `confidence` outside the range `[0.0, 1.0]` is rejected.
 - `result_url` must be a syntactically valid URL when present. An invalid URL is rejected, not corrected.
 - `links_to_follow` items are each validated as syntactically valid URLs. Invalid items are silently dropped from the list; the response is not rejected for containing them.
 - `reasoning` must be a non-empty string. A whitespace-only string is treated as empty and the response is rejected.
 - `found=True` with a null or missing `result_url` is rejected.
 - `found=False` with a non-null `result_url` is rejected.
+- `answer` is optional — a missing or null `answer` is always valid.
+- `found=False` with a non-null `answer` is rejected.
+- A non-null `answer` that is empty or whitespace-only is rejected.
 
 **On validation failure:**
 
@@ -316,6 +324,7 @@ If an exception is raised during adapter communication or response parsing, Char
 |---|---|---|
 | `found` | boolean | Whether Charlotte found at least one result within budget |
 | `result_urls` | list of strings | URLs of all found results, ordered by confidence. Empty if not found. |
+| `answers` | list of strings or null | *(v1.1)* Extracted answer text for each found result, in the same order as `result_urls`. An element is null when the model did not extract an answer (navigation goals, or factual goals where the value was not identified). The list itself is null when `found` is False. |
 | `content` | list of strings or null | Visible text of each found page, in the same order as `result_urls`, if `return_content` is True |
 | `confidence` | float | Highest model confidence among found results, or confidence at abandonment |
 | `pages_visited` | int | Total pages fetched during the crawl |
@@ -656,6 +665,18 @@ result = crawl(
 )
 ```
 
+**Factual answer extraction (v1.1):**
+```python
+result = crawl(
+    start_url="https://www.radychildrens.org",
+    goal="Find the number for the emergency room",
+    stream=False
+)
+# result.found         → True
+# result.result_urls   → ["https://www.radychildrens.org/services/emergency"]
+# result.answers       → ["(858) 966-1700"]   # verbatim from the page
+```
+
 ---
 
 ## 17. Streaming Events
@@ -705,6 +726,7 @@ timestamp:    string
 url:          string          — result URL (as found on page, not normalized)
 confidence:   float
 result_index: int             — 1-based index of this result in the crawl
+answer:       string or null  — (v1.1) extracted factual answer; null for navigation goals
 ```
 
 **`PageSkipped`**
@@ -806,12 +828,26 @@ The following scenarios must have test coverage from day one. Tests are written 
 | T-28 | `stream=False` — no events emitted | Silent mode correctness |
 | T-29 | `confidence_threshold` not reached | Crawl continues past a low-confidence candidate |
 | T-30 | All pages skipped due to failures | Returns `found=False` with failure summary, no exception |
+| T-31 | Factual goal — model populates `answer` | `CrawlResult.answers[0]` contains the extracted value; `ResultFound.answer` matches |
+| T-32 | Navigation goal — model returns `answer=null` | `CrawlResult.answers[0]` is null; no validation error raised |
+| T-33 | `answer` present with `found=False` | Rejected by validation; page skipped, crawl continues |
 
-Tests T-06 through T-30 use mocked HTTP, model responses, and filesystem — no live site dependencies.
+Tests T-06 through T-33 use mocked HTTP, model responses, and filesystem — no live site dependencies.
 
 ---
 
 
+
+## Version History
+
+| Spec | Software target | Changes |
+|---|---|---|
+| 1.0 | v1.0 (SOME PIG) | Initial specification |
+| 1.1 | v1.0 (SOME PIG) | Prompt hardening; two-layer model defence (plausibility guard + instruction mirroring) |
+| 1.2 | v1.0 (SOME PIG) | CHAR-017 integration test matrix (T-01–T-30); robots.txt RFC 9309 compliance; `CareNavigator/0.1` User-Agent |
+| 1.3 | v1.1 | `answer` field — factual extraction alongside result URLs (§6.2, §6.5, §7, §17); T-31–T-33 |
+
+---
 
 **PyPI package name:** `charlotte-crawler`
 
