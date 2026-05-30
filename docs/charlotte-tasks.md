@@ -1,5 +1,5 @@
 # Charlotte — Task Decomposition
-**Based on spec v1.2**
+**Based on spec v1.3**
 
 Tasks are ordered by dependency. Items marked **parallel** can be worked simultaneously once their prerequisites are done. Each task references the spec section it implements. Each task includes writing its own unit tests — integration tests against the public API are written as a dedicated task once the engine exists.
 
@@ -231,7 +231,23 @@ Organise by scenario number. Each test should be independently runnable and leav
 
 ---
 
-**CHAR-018 — Graceful failure audit**
+**CHAR-018 — Answer field (factual extraction)**
+Implement the `answer` field through the full stack, as specified in §6.2, §6.5, §7, and §17.
+
+- `models.py`: add `answer: str | None` to `ResultFound`; add `answers: list[str | None] | None` to `CrawlResult`, parallel to `result_urls`
+- `adapter_validation.py`: add validation rules for `answer` — optional field, non-null requires non-empty string, `found=False` with non-null `answer` rejected
+- Both adapters (`groq.py`, `local.py`): extend the system prompt to explain the `answer` field. Instruction: for factual goals (phone number, address, email, price, hours, name) copy the value verbatim from the page into `answer`; for navigation goals (find a page, find a PDF) leave `answer` null
+- `engine.py`: thread `answer` from validated model output through the provenance and plausibility gates into `ResultFound` events and `CrawlResult.answers`
+- Integration tests: T-31 (factual goal, model populates `answer`), T-32 (navigation goal, `answer=null`), T-33 (`answer` present with `found=False` rejected)
+
+The `answer` field is optional in the schema — existing adapters that omit it are not broken. The feature is additive.
+
+*Spec ref: §6.2, §6.5, §7, §17*
+*Prerequisite: CHAR-017*
+
+---
+
+**CHAR-019 — Graceful failure audit**
 Walk every row of the failure table in §12 and verify the exact behaviour in running code — not just that the code exists, but that the failure produces the correct outcome: correct exception logged, page skipped or crawl ended appropriately, `CrawlResult` returned (never raised), API keys absent from log output, `visit_log` free of raw page content. Document any discrepancies found and resolve them.
 
 This is a manual verification step, not a test run. It complements the integration test suite rather than replacing it.
@@ -241,11 +257,11 @@ This is a manual verification step, not a test run. It complements the integrati
 
 ---
 
-**CHAR-019 — Packaging and PyPI**
+**CHAR-020 — Packaging and PyPI**
 Finalise `pyproject.toml`. Write the full README covering: installation, quickstart with both `crawl()` and `find_link()`, both adapters, all parameters, all env vars, BYOM adapter authoring guide, robots.txt policy, streaming events reference, and error classes reference. Tag `v1.0.0` as `SOME PIG`. Publish `charlotte-crawler` to PyPI.
 
 *Spec ref: §16*
-*Prerequisite: CHAR-018*
+*Prerequisite: CHAR-019*
 
 ---
 
@@ -258,12 +274,12 @@ Finalise `pyproject.toml`. Write the full README covering: installation, quickst
 | 3 — Integration | CHAR-007 through 012 | Partial — see dependencies |
 | 4 — Crawl Engine | CHAR-013, 014 | No |
 | 5 — Streaming & Polish | CHAR-015, 016 | Yes — both |
-| 6 — Testing & Release | CHAR-017, 018, 019 | No |
+| 6 — Testing & Release | CHAR-017, 018, 019, 020 | No |
 
-**19 tasks total.**
+**20 tasks total.**
 
 **Minimum solo path:**
-CHAR-001 → 002 → 003 + 005 + 006 (parallel) → 004 → 007 → 008 → 009 → 010 → 011 → 012 → 013 → 014 → 015 → 016 → 017 → 018 → 019
+CHAR-001 → 002 → 003 + 005 + 006 (parallel) → 004 → 007 → 008 → 009 → 010 → 011 → 012 → 013 → 014 → 015 → 016 → 017 → 018 → 019 → 020
 
 **Key additions vs. prior decomposition:**
 - CHAR-003 (URL Normalizer) is new and foundational — three other components depend on it

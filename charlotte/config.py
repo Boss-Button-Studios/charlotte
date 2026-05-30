@@ -9,6 +9,11 @@ find_link() functions apply caller-supplied parameters on top. See spec §6.3.
 
 import os
 
+# Sent as the User-Agent header in every outbound HTTP request made by Charlotte
+# (page fetches and robots.txt checks). One value shared across both HTTP clients
+# so spec §11 user-agent matching and server-side logs stay consistent.
+HTTP_USER_AGENT: str = "CareNavigator/0.1"
+
 
 def _bool_env(key: str, default: bool) -> bool:
     """Parse a CHARLOTTE_* boolean environment variable.

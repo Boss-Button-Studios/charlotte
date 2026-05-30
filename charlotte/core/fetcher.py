@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from charlotte.config import HTTP_USER_AGENT
 from charlotte.core.normalizer import normalize_url
 from charlotte.exceptions import (
     CharlotteConfigError,
@@ -138,7 +139,11 @@ class PageFetcher:
         current_url = url
         start = time.monotonic()
 
-        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=timeout,
+            headers={"User-Agent": HTTP_USER_AGENT},
+        ) as client:
             while True:
                 try:
                     response = await client.get(current_url)

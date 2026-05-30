@@ -81,6 +81,9 @@ class CrawlResult:
     # Highest-confidence URL seen below confidence_threshold, when found=False.
     best_candidate_url: str | None
     budget_exhausted: bool
+    # Extracted answer text per result, parallel to result_urls. None per element when
+    # the model did not extract an answer (navigation goals). Null when found=False.
+    answers: list[str | None] | None = None
 
 
 @dataclass
@@ -147,6 +150,8 @@ class ResultFound:
     url: str                 # As found on the page — not normalized.
     confidence: float
     result_index: int        # 1-based index within this crawl.
+    # Verbatim extracted value for factual goals; null for navigation goals.
+    answer: str | None = None
     type: Literal["result_found"] = field(default="result_found", init=False)
     timestamp: str = field(default_factory=_now)
 

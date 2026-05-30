@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+# Sentinel used by nav() to distinguish "answer not passed" from "answer=None".
+_UNSET = object()
 
 # 60 words — above the thin-content threshold (THIN_CONTENT_WORD_THRESHOLD = 50).
 # Always used as the body text so confidence-spike plausibility never fires.
@@ -31,15 +33,23 @@ def nav(
     result_url: str | None,
     links: list[str],
     reason: str = "navigation decision",
+    answer: "str | None | object" = _UNSET,
 ) -> dict[str, Any]:
-    """Build a valid model response dict that passes schema validation."""
-    return {
+    """Build a valid model response dict that passes schema validation.
+
+    Pass answer= to include the answer field (use None for an explicit null,
+    or omit it entirely to leave the field absent from the response).
+    """
+    out: dict[str, Any] = {
         "found": found,
         "confidence": confidence,
         "result_url": result_url,
         "links_to_follow": links,
         "reasoning": reason,
     }
+    if answer is not _UNSET:
+        out["answer"] = answer
+    return out
 
 
 def seq(*responses: "dict[str, Any] | BaseException"):

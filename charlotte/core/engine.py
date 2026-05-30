@@ -10,6 +10,7 @@ See spec §4, §5.1, §12, §17.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import deque
 from time import monotonic
@@ -47,6 +48,8 @@ from charlotte.models import (
 
 if TYPE_CHECKING:
     from charlotte.adapters.base import AdapterProtocol
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +231,7 @@ async def _crawl_core(
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
     visited: set[str] = set()
     result_urls: list[str] = []
+    answers_list: list[str | None] = []
     content_list: list[str] = []
     visit_log: list[VisitLogEntry] = []
     pages_visited = 0
@@ -313,6 +317,9 @@ async def _crawl_core(
         effective_result_url = output.result_url if effective_found else None
         effective_links = prov.links_to_follow
 
+        if not prov.result_url_accepted and prov.rejection_detail:
+            logger.debug("Provenance rejection at %r: %s", page.url, prov.rejection_detail)
+
         # Plausibility check
         decision = NavDecision(
             found=effective_found,
@@ -328,7 +335,10 @@ async def _crawl_core(
         )
         if not plaus.passed:
             reason = "; ".join(f.detail for f in plaus.flags)
-            prov_note = "" if prov.result_url_accepted else " [provenance rejected result_url]"
+            prov_note = (
+                "" if prov.result_url_accepted
+                else f" [provenance: {prov.rejection_detail}]"
+            )
             model_summary = f"model: found={effective_found}, conf={output.confidence:.2f}{prov_note}"
             yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
             continue
@@ -370,12 +380,14 @@ async def _crawl_core(
 
         if effective_found and output.confidence >= confidence_threshold:
             result_urls.append(effective_result_url)  # type: ignore[arg-type]
+            answers_list.append(output.answer)
             if return_content:
                 content_list.append(extracted.text)
             yield ResultFound(
                 url=effective_result_url,  # type: ignore[arg-type]
                 confidence=output.confidence,
                 result_index=len(result_urls),
+                answer=output.answer,
             )
             if max_results is not None and len(result_urls) >= max_results:
                 break
@@ -405,6 +417,7 @@ async def _crawl_core(
         visit_log=visit_log,
         best_candidate_url=best_url if not found else None,
         budget_exhausted=budget_exhausted,
+        answers=answers_list if found else None,
     )
     result_holder.append(result)
 
