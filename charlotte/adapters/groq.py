@@ -47,6 +47,8 @@ Rules:
 - "result_url" must be a URL from this page when found=true, and null when found=false.
 - "links_to_follow" may be non-empty even when found=true if more results may exist.
 - "answer": copy the specific value verbatim — do not paraphrase or summarize. Use null when the goal is to find a page or link rather than a fact.
+- Do NOT substitute related-but-different information for what was asked. If the goal asks for an emergency room number and you only see a main hospital number, set found=false — they are not the same. Only set found=true when the page explicitly contains the exact information requested, not an approximation or a reasonable guess.
+- If your reasoning uses words like "likely", "probably", "might be", or "appears to be", your confidence should be below 0.5 and found should be false.
 - Respond with JSON only. No prose outside the JSON object.\
 """
 

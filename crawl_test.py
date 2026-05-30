@@ -12,10 +12,12 @@ Set CHARLOTTE_LOCAL_MODEL to override the model:
     CHARLOTTE_LOCAL_MODEL=llama3:8b python3 crawl_test.py https://docs.python.org/3/ "Find the tutorial"
 
 Optional env vars:
-    CHARLOTTE_MAX_PAGES   — page budget (default: 10)
-    CHARLOTTE_MAX_DEPTH   — hop limit   (default: 3)
-    CHARLOTTE_MAX_RESULTS — result cap, 0 = unlimited (default: 1)
-    CHARLOTTE_RENDER_JS   — use Playwright headless Chromium (default: false)
+    CHARLOTTE_MAX_PAGES      — page budget (default: 10)
+    CHARLOTTE_MAX_DEPTH      — hop limit   (default: 3)
+    CHARLOTTE_MAX_RESULTS    — result cap, 0 = unlimited (default: 1)
+    CHARLOTTE_RENDER_JS      — use Playwright headless Chromium (default: false)
+    CHARLOTTE_RESPECT_ROBOTS — obey robots.txt (default: true); set false for
+                               domains you own or have explicit crawl permission
 
 Log files land in crawl_logs/ (gitignored). Each run writes one file
 named <timestamp>_<hostname>.json for easy before/after comparison.
@@ -53,6 +55,7 @@ MAX_DEPTH = int(os.environ.get("CHARLOTTE_MAX_DEPTH", "3"))
 _max_results_env = os.environ.get("CHARLOTTE_MAX_RESULTS", "1")
 MAX_RESULTS = None if _max_results_env == "0" else int(_max_results_env)
 RENDER_JS = os.environ.get("CHARLOTTE_RENDER_JS", "").strip().lower() == "true"
+RESPECT_ROBOTS = os.environ.get("CHARLOTTE_RESPECT_ROBOTS", "true").strip().lower() != "false"
 
 LOGS_DIR = Path("crawl_logs")
 
@@ -80,7 +83,7 @@ async def main() -> None:
     print(f"URL:        {URL}")
     print(f"Goal:       {GOAL}")
     print(f"Model:      {adapter._model}")
-    print(f"max_pages:  {MAX_PAGES}  max_depth:  {MAX_DEPTH}  max_results: {MAX_RESULTS}  render_js: {RENDER_JS}")
+    print(f"max_pages:  {MAX_PAGES}  max_depth:  {MAX_DEPTH}  max_results: {MAX_RESULTS}  render_js: {RENDER_JS}  respect_robots: {RESPECT_ROBOTS}")
     print()
 
     log: dict = {
@@ -93,6 +96,7 @@ async def main() -> None:
             "max_depth": MAX_DEPTH,
             "max_results": MAX_RESULTS,
             "render_js": RENDER_JS,
+            "respect_robots": RESPECT_ROBOTS,
         },
         "events": [],
         "result": None,
@@ -110,6 +114,7 @@ async def main() -> None:
         max_depth=MAX_DEPTH,
         max_results=MAX_RESULTS,
         render_js=RENDER_JS,
+        respect_robots=RESPECT_ROBOTS,
         stream=True,
         default_delay=1.0,
     )
