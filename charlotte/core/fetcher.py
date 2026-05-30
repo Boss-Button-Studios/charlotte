@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from charlotte.config import HTTP_USER_AGENT
 from charlotte.core.normalizer import normalize_url
 from charlotte.exceptions import (
     CharlotteConfigError,
@@ -28,7 +29,6 @@ from charlotte.exceptions import (
 )
 
 _MAX_REDIRECTS: int = 5
-_HTTP_USER_AGENT: str = "CareNavigator/0.1"
 
 
 def _import_playwright() -> tuple:
@@ -142,7 +142,7 @@ class PageFetcher:
         async with httpx.AsyncClient(
             follow_redirects=False,
             timeout=timeout,
-            headers={"User-Agent": _HTTP_USER_AGENT},
+            headers={"User-Agent": HTTP_USER_AGENT},
         ) as client:
             while True:
                 try:

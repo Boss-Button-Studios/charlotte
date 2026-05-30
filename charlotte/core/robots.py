@@ -6,8 +6,8 @@ crawl session. Provides a single ``check()`` coroutine that the engine calls
 before fetching any URL when ``respect_robots=True``.
 
 Behaviour summary (§11.1):
-  - 404               → no restrictions, crawl proceeds
-  - Non-200 response  → RobotsError (uncrawlable)
+  - 4xx except 429    → no restrictions, crawl proceeds (RFC 9309 §2.3.1)
+  - 429 / 5xx / other → RobotsError (uncrawlable)
   - Timeout           → RobotsError (uncrawlable)
   - Connection error  → RobotsError (uncrawlable)
   - Malformed body    → RobotsError (uncrawlable); no partial parsing
@@ -33,11 +33,11 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from charlotte.config import HTTP_USER_AGENT
 from charlotte.exceptions import CharlotteInternalError, RobotsError
 
 _CHARLOTTE_UA: str = "CareNavigator"
 _WILDCARD_UA: str = "*"
-_HTTP_USER_AGENT: str = "CareNavigator/0.1"
 _DEFAULT_CONNECT_TIMEOUT: float = 10.0
 _DEFAULT_READ_TIMEOUT: float = 10.0
 
@@ -138,7 +138,7 @@ class RobotsHandler:
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
-                headers={"User-Agent": _HTTP_USER_AGENT},
+                headers={"User-Agent": HTTP_USER_AGENT},
                 follow_redirects=True,
             ) as client:
                 response = await client.get(robots_url)

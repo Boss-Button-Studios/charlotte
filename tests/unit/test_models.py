@@ -177,6 +177,12 @@ def test_result_found_type():
     e = ResultFound(url="https://example.com/calendar", confidence=0.95, result_index=1)
     assert e.type == "result_found"
     assert e.result_index == 1
+    assert e.answer is None  # default for navigation goals
+
+
+def test_result_found_answer_field():
+    e = ResultFound(url="https://example.com/contact", confidence=0.97, result_index=1, answer="555-1234")
+    assert e.answer == "555-1234"
 
 
 def test_page_skipped_type():
