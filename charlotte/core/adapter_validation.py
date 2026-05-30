@@ -29,8 +29,10 @@ _SCHEMA_HINT = (
     '"confidence" (float between 0.0 and 1.0 inclusive), '
     '"result_url" (non-null URL string when found=true, null when found=false), '
     '"links_to_follow" (array of URL strings, may be empty), '
-    '"reasoning" (non-empty string). '
-    "No extra fields. Respond with JSON only — no prose outside the object."
+    '"reasoning" (non-empty string), '
+    '"answer" (string with the extracted fact when found=true and the goal is factual, '
+    'null otherwise — optional field). '
+    "Respond with JSON only — no prose outside the object."
 )
 
 
@@ -47,6 +49,7 @@ class AdapterOutput:
     result_url: str | None   # Non-null iff found=True
     links_to_follow: list[str]
     reasoning: str
+    answer: str | None = None  # Verbatim extracted value for factual goals; null otherwise
 
 
 def _is_valid_url(value: object) -> bool:
@@ -79,7 +82,7 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
     if not isinstance(raw, dict):
         raise ValueError(f"adapter output must be a dict, got {type(raw).__name__}")
 
-    _ALLOWED_KEYS = {"found", "confidence", "result_url", "links_to_follow", "reasoning"}
+    _ALLOWED_KEYS = {"found", "confidence", "result_url", "links_to_follow", "reasoning", "answer"}
     extra_keys = set(raw) - _ALLOWED_KEYS
     if extra_keys:
         raise ValueError(f"unexpected field(s): {', '.join(sorted(extra_keys))}")
@@ -134,12 +137,23 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
     if not reasoning.strip():
         raise ValueError("'reasoning' must not be empty or whitespace-only")
 
+    # --- answer (optional) ---
+    answer = raw.get("answer", None)
+    if answer is not None:
+        if not found:
+            raise ValueError("'answer' must be null when 'found' is false")
+        if not isinstance(answer, str):
+            raise ValueError(f"'answer' must be a string, got {type(answer).__name__}")
+        if not answer.strip():
+            raise ValueError("'answer' must not be empty or whitespace-only")
+
     return AdapterOutput(
         found=found,
         confidence=confidence,
         result_url=result_url if found else None,
         links_to_follow=links_to_follow,
         reasoning=reasoning,
+        answer=answer,
     )
 
 

@@ -124,11 +124,12 @@ async def test_http_500_raises_robots_error():
 
 
 @respx.mock
-async def test_http_403_raises_robots_error():
-    """403 on robots.txt → RobotsError."""
+async def test_http_403_allows_crawl():
+    """403 on robots.txt → no restrictions (RFC 9309 §2.3.1); crawl proceeds."""
     respx.get(_ROBOTS).mock(return_value=httpx.Response(403))
-    with pytest.raises(RobotsError, match="403"):
-        await _handler().check(_PAGE, _DEFAULT_DELAY)
+    # Should not raise — 403 is treated as no restrictions
+    delay = await _handler().check(_PAGE, _DEFAULT_DELAY)
+    assert delay == _DEFAULT_DELAY
 
 
 @respx.mock

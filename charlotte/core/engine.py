@@ -228,6 +228,7 @@ async def _crawl_core(
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
     visited: set[str] = set()
     result_urls: list[str] = []
+    answers_list: list[str | None] = []
     content_list: list[str] = []
     visit_log: list[VisitLogEntry] = []
     pages_visited = 0
@@ -370,12 +371,14 @@ async def _crawl_core(
 
         if effective_found and output.confidence >= confidence_threshold:
             result_urls.append(effective_result_url)  # type: ignore[arg-type]
+            answers_list.append(output.answer)
             if return_content:
                 content_list.append(extracted.text)
             yield ResultFound(
                 url=effective_result_url,  # type: ignore[arg-type]
                 confidence=output.confidence,
                 result_index=len(result_urls),
+                answer=output.answer,
             )
             if max_results is not None and len(result_urls) >= max_results:
                 break
@@ -405,6 +408,7 @@ async def _crawl_core(
         visit_log=visit_log,
         best_candidate_url=best_url if not found else None,
         budget_exhausted=budget_exhausted,
+        answers=answers_list if found else None,
     )
     result_holder.append(result)
 

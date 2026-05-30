@@ -47,6 +47,7 @@ def test_crawl_result_fields():
         "found", "result_urls", "content", "confidence",
         "pages_visited", "depth_reached", "visit_log",
         "best_candidate_url", "budget_exhausted",
+        "answers",  # v1.1 — factual extraction
     }
     actual = {f.name for f in dataclasses.fields(CrawlResult)}
     assert actual == expected
