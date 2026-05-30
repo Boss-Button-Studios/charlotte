@@ -384,6 +384,8 @@ async def _crawl_core(
             confidence=output.confidence,
             links_queued=enqueued,
             reasoning=output.reasoning,
+            links_available=extracted.links,
+            links_suggested=output.links_to_follow,
         )
 
         if effective_found and output.confidence >= confidence_threshold:

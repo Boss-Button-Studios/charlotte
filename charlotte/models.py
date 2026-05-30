@@ -140,6 +140,10 @@ class ModelDecision:
     confidence: float
     links_queued: int        # How many links were enqueued after this decision.
     reasoning: str
+    # Links the extractor found and showed to the model ({text, url} pairs).
+    links_available: list[dict[str, str]] = field(default_factory=list)
+    # URLs the model recommended before provenance/domain/visited filtering.
+    links_suggested: list[str] = field(default_factory=list)
     type: Literal["model_decision"] = field(default="model_decision", init=False)
     timestamp: str = field(default_factory=_now)
 

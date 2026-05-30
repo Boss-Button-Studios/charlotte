@@ -157,9 +157,12 @@ async def main() -> None:
         elif isinstance(event, ModelDecision):
             print(
                 f"  [model]   found={event.found}  conf={event.confidence:.2f}  "
-                f"{event.links_queued} links queued  [{elapsed_ms}ms]"
+                f"{event.links_queued}/{len(event.links_suggested)} links queued/suggested  [{elapsed_ms}ms]"
             )
             print(f"            {textwrap.shorten(event.reasoning, width=100)}")
+            if event.links_suggested:
+                print(f"            suggested: {', '.join(textwrap.shorten(u, width=60) for u in event.links_suggested)}")
+            print(f"            saw {len(event.links_available)} links on page")
             log["events"].append({
                 "type": "ModelDecision",
                 "elapsed_ms": elapsed_ms,
@@ -167,6 +170,8 @@ async def main() -> None:
                 "found": event.found,
                 "confidence": event.confidence,
                 "links_queued": event.links_queued,
+                "links_suggested": event.links_suggested,
+                "links_available": event.links_available,
                 "reasoning": event.reasoning,
             })
 
