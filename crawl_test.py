@@ -15,7 +15,12 @@ Optional env vars:
     CHARLOTTE_MAX_PAGES      — page budget (default: 10)
     CHARLOTTE_MAX_DEPTH      — hop limit   (default: 3)
     CHARLOTTE_MAX_RESULTS    — result cap, 0 = unlimited (default: 1)
-    CHARLOTTE_RENDER_JS      — use Playwright headless Chromium (default: false)
+    CHARLOTTE_RENDER_JS      — use Playwright headless Chromium (default: false);
+                               requires: python3 -m pip install playwright &&
+                                         python3 -m playwright install chromium
+    CHARLOTTE_CHROMIUM_EXECUTABLE — path to a Chromium/Chrome binary; use when
+                               Playwright's bundled Chromium doesn't support the
+                               current OS (e.g. Ubuntu 26.04+)
     CHARLOTTE_RESPECT_ROBOTS — obey robots.txt (default: true); set false for
                                domains you own or have explicit crawl permission
 
@@ -56,6 +61,7 @@ _max_results_env = os.environ.get("CHARLOTTE_MAX_RESULTS", "1")
 MAX_RESULTS = None if _max_results_env == "0" else int(_max_results_env)
 RENDER_JS = os.environ.get("CHARLOTTE_RENDER_JS", "").strip().lower() == "true"
 RESPECT_ROBOTS = os.environ.get("CHARLOTTE_RESPECT_ROBOTS", "true").strip().lower() != "false"
+CHROMIUM_EXECUTABLE = os.environ.get("CHARLOTTE_CHROMIUM_EXECUTABLE") or None
 
 LOGS_DIR = Path("crawl_logs")
 
@@ -83,7 +89,7 @@ async def main() -> None:
     print(f"URL:        {URL}")
     print(f"Goal:       {GOAL}")
     print(f"Model:      {adapter._model}")
-    print(f"max_pages:  {MAX_PAGES}  max_depth:  {MAX_DEPTH}  max_results: {MAX_RESULTS}  render_js: {RENDER_JS}  respect_robots: {RESPECT_ROBOTS}")
+    print(f"max_pages:  {MAX_PAGES}  max_depth:  {MAX_DEPTH}  max_results: {MAX_RESULTS}  render_js: {RENDER_JS}  respect_robots: {RESPECT_ROBOTS}  chromium: {CHROMIUM_EXECUTABLE or 'bundled'}")
     print()
 
     log: dict = {
@@ -97,6 +103,7 @@ async def main() -> None:
             "max_results": MAX_RESULTS,
             "render_js": RENDER_JS,
             "respect_robots": RESPECT_ROBOTS,
+            "chromium_executable": CHROMIUM_EXECUTABLE,
         },
         "events": [],
         "result": None,
@@ -115,6 +122,7 @@ async def main() -> None:
         max_results=MAX_RESULTS,
         render_js=RENDER_JS,
         respect_robots=RESPECT_ROBOTS,
+        chromium_executable=CHROMIUM_EXECUTABLE,
         stream=True,
         default_delay=1.0,
     )

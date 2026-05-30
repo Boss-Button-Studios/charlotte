@@ -44,8 +44,9 @@ def _import_playwright() -> tuple:
         return async_playwright, _PlaywrightTimeout
     except ImportError as exc:
         raise CharlotteConfigError(
-            "Playwright rendering (render_js=True) requires the playwright extra. "
-            "Install it with: pip install 'charlotte-crawler[playwright]'."
+            "Playwright rendering (render_js=True) requires the playwright package. "
+            "Install it with: python3 -m pip install playwright && "
+            "python3 -m playwright install chromium"
         ) from exc
 
 
@@ -84,9 +85,13 @@ class PageFetcher:
         render_js: bool = False,
         render_timeout: float = 15.0,
         polite_delay: float = 1.0,
+        chromium_executable: str | None = None,
     ) -> None:
         self._render_js = render_js
         self._render_timeout = render_timeout
+        # None → use Playwright's bundled Chromium; non-None → use this path instead.
+        # Useful on OS versions Playwright doesn't yet support (e.g. Ubuntu 26.04).
+        self._chromium_executable = chromium_executable
         if render_js:
             factory, timeout_err = _import_playwright()
             self._playwright_factory = factory
@@ -227,12 +232,15 @@ class PageFetcher:
         start = time.monotonic()
         try:
             async with self._playwright_factory() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                launch_kwargs: dict = {"headless": True}
+                if self._chromium_executable:
+                    launch_kwargs["executable_path"] = self._chromium_executable
+                browser = await pw.chromium.launch(**launch_kwargs)
                 try:
                     page = await browser.new_page()
                     response = await page.goto(
                         url,
-                        wait_until="networkidle",
+                        wait_until="domcontentloaded",
                         timeout=self._render_timeout * 1000,
                     )
                     html = await page.content()
@@ -248,7 +256,7 @@ class PageFetcher:
             raise
         except Exception as exc:
             raise CharlotteNetworkError(
-                f"Playwright error fetching {url!r}: {type(exc).__name__}"
+                f"Playwright error fetching {url!r}: {type(exc).__name__}: {exc}"
             ) from exc
 
         # Post-navigation domain and loop checks — mirrors the httpx redirect policy.

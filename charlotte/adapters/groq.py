@@ -49,6 +49,8 @@ Rules:
 - "answer": copy the specific value verbatim — do not paraphrase or summarize. Use null when the goal is to find a page or link rather than a fact.
 - Do NOT substitute related-but-different information for what was asked. If the goal asks for an emergency room number and you only see a main hospital number, set found=false — they are not the same. Only set found=true when the page explicitly contains the exact information requested, not an approximation or a reasonable guess.
 - If your reasoning uses words like "likely", "probably", "might be", or "appears to be", your confidence should be below 0.5 and found should be false.
+- Do NOT add any URL from "Previously visited pages" to links_to_follow — those pages have already been evaluated. Do not add the current page URL to links_to_follow either.
+- When the goal involves finding a specific category of content (doctors by specialty, products by type, articles by topic), follow directory, index, or category links that could lead to that category — even if the match is indirect (e.g. "Specialists" → "Respiratory" → respiratory doctors).
 - Respond with JSON only. No prose outside the JSON object.\
 """
 
@@ -102,6 +104,10 @@ def _build_user_prompt(
 
     parts.append("")
     parts.append(f"Results found so far: {results_so_far}")
+
+    parts.append("")
+    parts.append(f"Reminder — your goal is: {goal}")
+    parts.append("Evaluate whether this page satisfies that goal, then decide which links to follow next.")
 
     return "\n".join(parts)
 

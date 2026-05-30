@@ -75,6 +75,7 @@ def crawl(
     read_timeout: float = 30.0,
     render_timeout: float = 15.0,
     default_delay: float = 1.0,
+    chromium_executable: "str | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Navigate toward *goal* starting from *start_url*.
 
@@ -99,6 +100,9 @@ def crawl(
         read_timeout:         Response body read timeout (seconds).
         render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
         default_delay:        Floor for the polite inter-request delay (seconds).
+        chromium_executable:  Path to a Chromium/Chrome binary. Use when Playwright's
+                              bundled Chromium doesn't support the current OS (e.g.
+                              Ubuntu 26.04). Ignored when render_js=False.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
@@ -156,6 +160,7 @@ def crawl(
         read_timeout=read_timeout,
         render_timeout=render_timeout,
         default_delay=default_delay,
+        chromium_executable=chromium_executable,
     )
 
     if stream:
@@ -192,6 +197,7 @@ async def _crawl_core(
     read_timeout: float,
     render_timeout: float,
     default_delay: float,
+    chromium_executable: "str | None",
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
 
@@ -226,6 +232,7 @@ async def _crawl_core(
         read_timeout=read_timeout,
         render_timeout=render_timeout,
         polite_delay=polite_delay,
+        chromium_executable=chromium_executable,
     )
 
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
@@ -283,8 +290,9 @@ async def _crawl_core(
         clean = strip_hidden(page.html)
         extracted = extract(clean, page_url=page.url)
 
-        # Model call
-        history = [e.url for e in visit_log[-10:]]
+        # Model call — include the current page in history so the model
+        # doesn't recommend it as a next step when it's already standing on it.
+        history = [e.url for e in visit_log[-10:]] + [page.url]
         try:
             output = await call_with_validation(
                 model,
