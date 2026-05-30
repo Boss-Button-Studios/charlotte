@@ -139,6 +139,7 @@ class RobotsHandler:
             async with httpx.AsyncClient(
                 timeout=timeout,
                 headers={"User-Agent": _HTTP_USER_AGENT},
+                follow_redirects=True,
             ) as client:
                 response = await client.get(robots_url)
         except httpx.TimeoutException:
