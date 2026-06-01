@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
+from charlotte.config import CharlotteConfig
 from charlotte.core.engine import crawl
 from charlotte.models import CrawlResult, LinkResult, StreamEvent
 
@@ -48,12 +49,12 @@ def find_link(
     model: "AdapterProtocol | None" = None,
     max_pages: int = 20,
     max_depth: int = 5,
-    confidence_threshold: float = 0.85,
+    confidence_threshold: float = 0.70,
     render_js: bool = False,
     allowed_domains: "list[str] | None" = None,
     navigation_hint: "str | None" = None,
-    stream: bool = True,
-    respect_robots: bool = True,
+    stream: "bool | None" = None,
+    respect_robots: "bool | None" = None,
     connect_timeout: float = 10.0,
     read_timeout: float = 30.0,
     render_timeout: float = 15.0,
@@ -110,7 +111,9 @@ def find_link(
         default_delay=default_delay,
     )
 
-    if stream:
+    resolved_stream = CharlotteConfig.stream() if stream is None else stream
+
+    if resolved_stream:
         return crawl(start_url, goal, stream=True, **_kwargs)
 
     async def _silent() -> LinkResult:

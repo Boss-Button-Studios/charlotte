@@ -15,7 +15,7 @@ Environment variables:
     CHARLOTTE_LOCAL_BASE_URL — base URL for the inference server
                                (default: http://localhost:11434)
     CHARLOTTE_LOCAL_MODEL    — model name passed to the API
-                               (default: llama3:8b)
+                               (default: deepseek-r1:14b)
 
 See spec §6.3, §6.4.
 """
@@ -182,7 +182,7 @@ class LocalAdapter:
                     Default: ``http://localhost:11434`` (Ollama standard address).
         model_name: Model name string passed to the API. Constructor argument takes
                     precedence over ``CHARLOTTE_LOCAL_MODEL``.
-                    Default: ``llama3:8b``.
+                    Default: ``deepseek-r1:14b``.
         timeout:    Total request timeout in seconds, or None for no timeout.
                     Local inference time is hardware-dependent and unbounded;
                     None (the default) waits as long as the model needs.

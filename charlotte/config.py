@@ -58,8 +58,8 @@ class CharlotteConfig:
 
     @staticmethod
     def local_model() -> str:
-        """Model name for the LocalAdapter. Default: llama3:8b."""
-        return os.environ.get("CHARLOTTE_LOCAL_MODEL", "llama3:8b").strip()
+        """Model name for the LocalAdapter. Default: deepseek-r1:14b."""
+        return os.environ.get("CHARLOTTE_LOCAL_MODEL", "deepseek-r1:14b").strip()
 
     @staticmethod
     def stream() -> bool:
