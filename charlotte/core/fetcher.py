@@ -129,7 +129,21 @@ class PageFetcher:
         await asyncio.sleep(self._polite_delay)
 
         if self._render_js:
-            return await self._fetch_with_playwright(url, visited_urls=visited_urls)
+            # Hard ceiling on the entire Playwright operation: browser launch +
+            # page navigation + content capture. render_timeout only covers
+            # page.goto(); on a resource-starved machine the browser launch
+            # itself can hang indefinitely without this outer guard.
+            _total_pw_timeout = self._connect_timeout + self._render_timeout + 30
+            try:
+                return await asyncio.wait_for(
+                    self._fetch_with_playwright(url, visited_urls=visited_urls),
+                    timeout=_total_pw_timeout,
+                )
+            except asyncio.TimeoutError:
+                raise CharlotteTimeoutError(
+                    f"Playwright fetch of {url!r} timed out after "
+                    f"{_total_pw_timeout:.0f}s (browser launch + navigation)"
+                )
 
         timeout = httpx.Timeout(
             connect=self._connect_timeout,

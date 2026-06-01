@@ -20,10 +20,19 @@ _UNSET = object()
 BODY = " ".join(["word"] * 60)
 
 
-def page(body: str = BODY, links: list[tuple[str, str]] | None = None) -> str:
-    """Build minimal HTML with optional anchor links (text, absolute-URL)."""
+def page(
+    body: str = BODY,
+    links: list[tuple[str, str]] | None = None,
+    extra: str = "",
+) -> str:
+    """Build minimal HTML with optional anchor links (text, absolute-URL).
+
+    Pass extra= to append additional text inside the body paragraph — useful
+    for tests that need a specific answer string to appear verbatim on the page.
+    """
     anchors = "".join(f'<a href="{url}">{text}</a>' for text, url in (links or []))
-    return f"<html><body><p>{body}</p>{anchors}</body></html>"
+    body_text = f"{body} {extra}" if extra else body
+    return f"<html><body><p>{body_text}</p>{anchors}</body></html>"
 
 
 def nav(

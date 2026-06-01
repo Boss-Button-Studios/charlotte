@@ -257,14 +257,14 @@ def test_max_links_cap_applied():
     assert len(page.links) == 5
 
 
-def test_max_links_default_is_fifty():
-    """Default max_links is 50 — pages with more anchors are capped at 50."""
+def test_max_links_default_is_two_hundred():
+    """Default max_links is 200 -- pages with more anchors are capped at 200."""
     hrefs = "".join(
         f'<a href="https://example.com/p{i}">Link {i}</a>'
-        for i in range(60)
+        for i in range(210)
     )
     page = extract(hrefs, _BASE)
-    assert len(page.links) == 50
+    assert len(page.links) == 200
 
 
 def test_max_links_zero_returns_empty():
@@ -323,8 +323,146 @@ def test_inner_charlotte_internal_error_reraises_unchanged():
     """A CharlotteInternalError raised inside extract propagates as-is — not double-wrapped."""
     inner = CharlotteInternalError("inner problem")
     mock_soup = MagicMock()
-    mock_soup.get_text.side_effect = inner
+    mock_soup.find.return_value = None  # title lookup must not interfere
+    mock_soup.find_all.side_effect = inner
     with patch("charlotte.core.extractor.BeautifulSoup", return_value=mock_soup):
         with pytest.raises(CharlotteInternalError) as exc_info:
             extract("<p>Hello</p>", _BASE)
     assert exc_info.value is inner
+
+
+# ---------------------------------------------------------------------------
+# Structural zone priority
+# ---------------------------------------------------------------------------
+
+def test_main_content_link_before_nav_link():
+    """A link inside <main> appears before a link inside <nav>, regardless of DOM order."""
+    html = """
+    <html><body>
+      <nav><a href="https://example.com/nav">Nav link</a></nav>
+      <main><a href="https://example.com/content">Content link</a></main>
+    </body></html>
+    """
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert urls.index("https://example.com/content") < urls.index("https://example.com/nav")
+
+
+def test_nav_links_cut_first_when_cap_reached():
+    """When max_links is tight, chrome-zone links are dropped before content-zone links."""
+    nav_links = "".join(
+        f'<a href="https://example.com/nav{i}">Nav {i}</a>'
+        for i in range(5)
+    )
+    content_links = "".join(
+        f'<a href="https://example.com/content{i}">Content {i}</a>'
+        for i in range(5)
+    )
+    # Nav appears first in DOM; content appears second. Cap set to 6 (less than 10 total).
+    html = f"<nav>{nav_links}</nav><main>{content_links}</main>"
+    page = extract(html, _BASE, max_links=6)
+    urls = [lnk["url"] for lnk in page.links]
+    # All 5 content links must be present.
+    for i in range(5):
+        assert f"https://example.com/content{i}" in urls
+    # Only 1 nav link fits; the rest were cut.
+    nav_count = sum(1 for u in urls if "/nav" in u)
+    assert nav_count == 1
+
+
+def test_section_and_article_treated_as_content_zone():
+    """Links inside <section> and <article> are zone 0, same as <main>."""
+    html = """
+    <nav><a href="https://example.com/nav">Nav</a></nav>
+    <article><a href="https://example.com/article">Article</a></article>
+    <section><a href="https://example.com/section">Section</a></section>
+    """
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    nav_idx = urls.index("https://example.com/nav")
+    assert urls.index("https://example.com/article") < nav_idx
+    assert urls.index("https://example.com/section") < nav_idx
+
+
+def test_header_and_footer_treated_as_chrome_zone():
+    """Links inside <header> and <footer> are deprioritized like <nav>."""
+    html = """
+    <header><a href="https://example.com/header">Header</a></header>
+    <footer><a href="https://example.com/footer">Footer</a></footer>
+    <main><a href="https://example.com/content">Content</a></main>
+    """
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    content_idx = urls.index("https://example.com/content")
+    assert urls.index("https://example.com/header") > content_idx
+    assert urls.index("https://example.com/footer") > content_idx
+
+
+def test_same_url_in_main_and_nav_kept_as_content_zone():
+    """When a URL appears in both <main> and <nav>, the <main> (content) entry is kept."""
+    html = """
+    <nav><a href="https://example.com/page">Nav copy</a></nav>
+    <main><a href="https://example.com/page">Content copy</a></main>
+    """
+    page = extract(html, _BASE)
+    assert len(page.links) == 1
+    assert page.links[0]["text"] == "Content copy"
+
+
+def test_unstructured_link_between_content_and_chrome():
+    """A link with no structural ancestor (neutral zone) sorts after content but before chrome."""
+    html = """
+    <nav><a href="https://example.com/nav">Nav</a></nav>
+    <div><a href="https://example.com/div">Div</a></div>
+    <main><a href="https://example.com/main">Main</a></main>
+    """
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert urls.index("https://example.com/main") < urls.index("https://example.com/div")
+    assert urls.index("https://example.com/div") < urls.index("https://example.com/nav")
+
+
+# ---------------------------------------------------------------------------
+# Structural zone priority — text ordering
+# ---------------------------------------------------------------------------
+
+def test_text_content_zone_before_chrome_zone():
+    """Text inside <main> appears before text inside <nav> regardless of DOM order."""
+    html = """
+    <nav>Site navigation</nav>
+    <main>Page content</main>
+    """
+    page = extract(html, _BASE)
+    assert page.text.index("Page content") < page.text.index("Site navigation")
+
+
+def test_text_chrome_last_when_dom_first():
+    """Header/footer text is pushed to the end even when it appears first in the DOM."""
+    html = """
+    <header>555-0000</header>
+    <main>555-1234</main>
+    <footer>Copyright</footer>
+    """
+    page = extract(html, _BASE)
+    # Department number (main) must appear before the general number (header)
+    assert page.text.index("555-1234") < page.text.index("555-0000")
+    assert page.text.index("555-1234") < page.text.index("Copyright")
+
+
+def test_text_all_zones_present():
+    """Text from all three zones is present in the output."""
+    html = "<nav>Nav</nav><div>Neutral</div><main>Content</main>"
+    page = extract(html, _BASE)
+    assert "Content" in page.text
+    assert "Neutral" in page.text
+    assert "Nav" in page.text
+
+
+def test_text_zone_order_is_content_neutral_chrome():
+    """Zone ordering is strictly: content (0) then neutral (1) then chrome (2)."""
+    html = "<footer>Footer</footer><div>Middle</div><article>Article</article>"
+    page = extract(html, _BASE)
+    article_pos = page.text.index("Article")
+    middle_pos = page.text.index("Middle")
+    footer_pos = page.text.index("Footer")
+    assert article_pos < middle_pos < footer_pos

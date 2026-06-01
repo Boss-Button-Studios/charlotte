@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections import deque
 from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
+from charlotte.config import CharlotteConfig
 from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
@@ -53,6 +55,25 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Default adapter resolution (spec §5.1, §6.3)
+# ---------------------------------------------------------------------------
+
+def _resolve_default_adapter() -> "AdapterProtocol":
+    """Instantiate the default adapter from CharlotteConfig (spec §5.1).
+
+    Consults CHARLOTTE_DEFAULT_ADAPTER ('groq' or 'local'). Falls back to
+    GroqAdapter. Each constructor raises CharlotteConfigError with a clear
+    message if its requirements (e.g. GROQ_API_KEY) are not met.
+    """
+    adapter_name = CharlotteConfig.default_adapter()
+    if adapter_name == "local":
+        from charlotte.adapters.local import LocalAdapter
+        return LocalAdapter()
+    from charlotte.adapters.groq import GroqAdapter
+    return GroqAdapter()
+
+
+# ---------------------------------------------------------------------------
 # CHAR-013 — Public crawl() entry point
 # ---------------------------------------------------------------------------
 
@@ -69,8 +90,8 @@ def crawl(
     allowed_domains: "list[str] | None" = None,
     return_content: bool = False,
     navigation_hint: "str | None" = None,
-    stream: bool = True,
-    respect_robots: bool = True,
+    stream: "bool | None" = None,
+    respect_robots: "bool | None" = None,
     connect_timeout: float = 10.0,
     read_timeout: float = 30.0,
     render_timeout: float = 15.0,
@@ -112,6 +133,12 @@ def crawl(
         CharlotteConfigError: Invalid configuration (playwright not installed,
                               invalid start_url, or no model provided).
     """
+    # Resolve env-var defaults for sentinel parameters (spec §6.3).
+    if stream is None:
+        stream = CharlotteConfig.stream()
+    if respect_robots is None:
+        respect_robots = CharlotteConfig.respect_robots()
+
     if render_js:
         # Check availability before the generator starts — spec §8 requires the
         # error to surface immediately, not on the first iteration.
@@ -121,9 +148,7 @@ def crawl(
             f"render_timeout must be a finite positive number, got: {render_timeout!r}"
         )
     if model is None:
-        raise CharlotteConfigError(
-            "No model adapter provided. Pass model=LocalAdapter() or model=GroqAdapter()."
-        )
+        model = _resolve_default_adapter()
     try:
         normalized_start = normalize_url(start_url)
     except CharlotteConfigError as exc:
@@ -298,7 +323,7 @@ async def _crawl_core(
                 model,
                 goal=goal,
                 navigation_hint=navigation_hint,
-                page_title="",
+                page_title=extracted.title,
                 page_url=page.url,
                 page_summary=extracted.text,
                 available_links=extracted.links,
@@ -359,6 +384,23 @@ async def _crawl_core(
 
         if not prov.result_url_accepted and prov.rejection_detail:
             logger.debug("Provenance rejection at %r: %s", page.url, prov.rejection_detail)
+
+        # Answer content gate — spec §9.4: the answer must be a "verbatim fact
+        # copied from the page". Verify it appears (after whitespace normalization)
+        # in the extracted text or title before promotion.
+        if effective_found and output.answer is not None:
+            full_text = re.sub(
+                r"\s+", " ", f"{extracted.title}\n{extracted.text}".strip()
+            ).casefold()
+            norm_answer = re.sub(r"\s+", " ", output.answer.strip()).casefold()
+            if norm_answer and norm_answer not in full_text:
+                logger.debug(
+                    "Answer content gate rejected at %r: normalized answer missing "
+                    "from page text (answer_length=%d)",
+                    page.url, len(output.answer),
+                )
+                effective_found = False
+                effective_result_url = None
 
         visit_log.append(VisitLogEntry(
             url=page.url,

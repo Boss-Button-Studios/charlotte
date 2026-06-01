@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
+from charlotte.config import CharlotteConfig
 from charlotte.core.engine import crawl
 from charlotte.models import CrawlResult, LinkResult, StreamEvent
 
@@ -48,12 +49,12 @@ def find_link(
     model: "AdapterProtocol | None" = None,
     max_pages: int = 20,
     max_depth: int = 5,
-    confidence_threshold: float = 0.85,
+    confidence_threshold: float = 0.70,
     render_js: bool = False,
     allowed_domains: "list[str] | None" = None,
     navigation_hint: "str | None" = None,
-    stream: bool = True,
-    respect_robots: bool = True,
+    stream: "bool | None" = None,
+    respect_robots: "bool | None" = None,
     connect_timeout: float = 10.0,
     read_timeout: float = 30.0,
     render_timeout: float = 15.0,
@@ -69,7 +70,10 @@ def find_link(
     Args:
         start_url:            Absolute URL at which to begin.
         goal:                 Natural language description of what to find.
-        model:                Adapter callable. Raises CharlotteConfigError if None.
+        model:                Adapter callable. None resolves via
+                              CHARLOTTE_DEFAULT_ADAPTER (default: GroqAdapter).
+                              Raises CharlotteConfigError if the resolved adapter
+                              cannot be configured (e.g. missing GROQ_API_KEY).
         max_pages:            Hard ceiling on total pages fetched.
         max_depth:            Maximum link-hops from start_url.
         confidence_threshold: Minimum model confidence to record a result (0–1).
@@ -79,7 +83,9 @@ def find_link(
         navigation_hint:      Extra context passed to the model alongside the goal.
         stream:               True → return AsyncGenerator of events.
                               False → return coroutine resolving to LinkResult.
-        respect_robots:       Fetch and obey robots.txt before crawling.
+                              None → read CHARLOTTE_STREAM (default: True).
+        respect_robots:       True/False overrides CHARLOTTE_RESPECT_ROBOTS.
+                              None → read CHARLOTTE_RESPECT_ROBOTS (default: True).
         connect_timeout:      TCP connection timeout for HTTP requests (seconds).
         read_timeout:         Response body read timeout (seconds).
         render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
@@ -110,7 +116,9 @@ def find_link(
         default_delay=default_delay,
     )
 
-    if stream:
+    resolved_stream = CharlotteConfig.stream() if stream is None else stream
+
+    if resolved_stream:
         return crawl(start_url, goal, stream=True, **_kwargs)
 
     async def _silent() -> LinkResult:
