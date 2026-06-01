@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections import deque
 from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
@@ -383,6 +384,20 @@ async def _crawl_core(
 
         if not prov.result_url_accepted and prov.rejection_detail:
             logger.debug("Provenance rejection at %r: %s", page.url, prov.rejection_detail)
+
+        # Answer content gate — spec §9.4: the answer must be a "verbatim fact
+        # copied from the page". Verify it appears (after whitespace normalization)
+        # in the extracted text or title before promotion.
+        if effective_found and output.answer is not None:
+            full_text = (extracted.title + "\n" + extracted.text).casefold()
+            norm_answer = re.sub(r"\s+", " ", output.answer.strip()).casefold()
+            if norm_answer and norm_answer not in full_text:
+                logger.debug(
+                    "Answer content gate rejected %r at %r: answer not in page text",
+                    output.answer[:80], page.url,
+                )
+                effective_found = False
+                effective_result_url = None
 
         visit_log.append(VisitLogEntry(
             url=page.url,

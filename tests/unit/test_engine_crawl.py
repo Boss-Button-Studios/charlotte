@@ -74,6 +74,16 @@ _HTML_CONTACT = (
 )
 _HTML_EMPTY = f'<html><body><p>{_WORDS}</p></body></html>'
 
+_PHONE = "555-867-5309"
+_HTML_WITH_PHONE = (
+    f'<html><head><title>Contact</title></head><body><p>{_WORDS}</p>'
+    f'<p>Main line: {_PHONE}</p>'
+    '</body></html>'
+)
+_HTML_PHONE_IN_TITLE = (
+    f'<html><head><title>Call {_PHONE}</title></head><body><p>{_WORDS}</p></body></html>'
+)
+
 
 def _mock_404_robots():
     """Register a 404 response for example.com/robots.txt."""
@@ -824,3 +834,73 @@ async def test_fetch_unexpected_exception_emits_page_skipped():
     skipped = [e for e in events if isinstance(e, PageSkipped)]
     assert skipped  # unexpected exception caught and emitted as PageSkipped
     assert any(isinstance(e, CrawlComplete) for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Answer content gate — spec §9.4
+# ---------------------------------------------------------------------------
+
+def _adapter_fact_answer(answer: str):
+    """Reports found=True with the given answer string on any page."""
+    async def _adapter(*, page_url, **kwargs):
+        return {
+            "found": True,
+            "confidence": 0.95,
+            "result_url": page_url,
+            "links_to_follow": [],
+            "reasoning": f"Found fact: {answer}",
+            "answer": answer,
+        }
+    return _adapter
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_answer_content_gate_passes_when_answer_in_body():
+    """answer present in body text → result promoted normally."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, html=_HTML_WITH_PHONE))
+
+    result = await crawl(
+        _START, "Find the phone number",
+        model=_adapter_fact_answer(_PHONE),
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is True
+    assert _START in result.result_urls
+    assert result.answers == [_PHONE]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_answer_content_gate_rejects_fabricated_answer():
+    """answer not in page text → gate rejects, result not promoted."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, html=_HTML_WITH_PHONE))
+
+    result = await crawl(
+        _START, "Find the phone number",
+        model=_adapter_fact_answer("999-MADE-UP"),
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is False
+    assert result.result_urls == []
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_answer_content_gate_passes_when_answer_in_title():
+    """answer present in <title> tag → gate accepts (title checked alongside body)."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, html=_HTML_PHONE_IN_TITLE))
+
+    result = await crawl(
+        _START, "Find the phone number",
+        model=_adapter_fact_answer(_PHONE),
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is True
+    assert result.answers == [_PHONE]

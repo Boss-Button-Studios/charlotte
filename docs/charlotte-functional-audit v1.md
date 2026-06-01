@@ -154,7 +154,7 @@ The "zero links, no path" condition has an additional spec rule: *"The model rec
 
 - `charlotte/core/extractor.py` `ExtractedPage` has `text` and `links`. No `title` field. The extractor never reads `<title>`.
 - `charlotte/core/engine.py` line 301 passes `page_title=""` to `call_with_validation`.
-- Both `GroqAdapter` and `LocalAdapter` `_build_user_prompt` render `"Title: {page_title}"` — i.e. every model call literally contains `Title: ` (empty) as a line.
+- Both `GroqAdapter` and `LocalAdapter` `_build_user_prompt` render `"Title: {page_title}"` — i.e. every model call literally contains `Title:` (empty string) as a line.
 
 **Why it matters:** The title is one of the strongest disambiguation signals on most web pages, especially when URLs are opaque (e.g. `/p?id=4193`). The adapter `Protocol` even declares `page_title` as a required parameter, so this isn't a missing-feature gap, it's a wiring gap — every component is plumbed for the title except the place where the title gets produced.
 
