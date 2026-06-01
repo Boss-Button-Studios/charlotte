@@ -131,7 +131,7 @@ Maximum number of link-hops from `start_url`. Prevents Charlotte from wandering 
 **`max_results`** *(int or None, default: 1)*
 Maximum number of matching results to collect before returning. When `1`, Charlotte returns as soon as she finds the first match above `confidence_threshold`. When `None`, Charlotte collects all matches she can find within the page and depth budget. Any integer `N` collects up to N matches. Useful for landing pages that link to multiple target documents — regional directories, annual report archives, etc.
 
-**`confidence_threshold`** *(float 0–1, default: 0.85)*
+**`confidence_threshold`** *(float 0–1, default: 0.70)*
 The minimum confidence the navigator model must report before Charlotte records a result. Below this threshold, Charlotte continues navigating even if she believes she may have found something.
 
 **`render_js`** *(bool, default: False)*
@@ -231,7 +231,7 @@ The adapter is responsible for prompt construction, API communication, and parsi
 
 `GroqAdapter` — calls Llama 3 8B Instruct via the Groq API. Requires a `GROQ_API_KEY` environment variable. Fast, cheap, and appropriate for cloud-hosted deployments.
 
-`LocalAdapter` — calls any OpenAI-compatible local inference endpoint. Defaults to Ollama's standard address (`http://localhost:11434`) and Llama 3 8B, but both are configurable via constructor arguments or environment variables. Requires no API key.
+`LocalAdapter` — calls any OpenAI-compatible local inference endpoint. Defaults to Ollama's standard address (`http://localhost:11434`) and DeepSeek R1 14B, but both are configurable via constructor arguments or environment variables. Requires no API key.
 
 The `LocalAdapter` is a fully supported production path. Self-hosted inference — whether via Ollama, LM Studio, llama.cpp, or any other OpenAI-compatible server — is appropriate for any deployment where the operator controls the model host. It is not a development-only tool. Choose between `GroqAdapter` and `LocalAdapter` based on your deployment context, not on any assumption about production readiness.
 
@@ -241,7 +241,7 @@ The `LocalAdapter` is a fully supported production path. Self-hosted inference �
 |---|---|---|
 | `CHARLOTTE_DEFAULT_ADAPTER` | `"groq"` | `"groq"` or `"local"` — selects the shipped default adapter |
 | `CHARLOTTE_LOCAL_BASE_URL` | `"http://localhost:11434"` | Base URL for the `LocalAdapter` |
-| `CHARLOTTE_LOCAL_MODEL` | `"llama3:8b"` | Model name for the `LocalAdapter` |
+| `CHARLOTTE_LOCAL_MODEL` | `"deepseek-r1:14b"` | Model name for the `LocalAdapter` |
 | `CHARLOTTE_STREAM` | `"true"` | `"true"` or `"false"` — sets streaming default |
 | `CHARLOTTE_RESPECT_ROBOTS` | `"true"` | `"true"` or `"false"` — sets robots.txt default |
 | `GROQ_API_KEY` | *(required for GroqAdapter)* | Groq API key |
@@ -273,8 +273,9 @@ The navigation task is focused relevance classification and decision-making, not
 | Mistral 7B Instruct | Together.ai / Groq | Strong alternative. Good at following structured output constraints. |
 | Llama 3 70B Instruct | Groq / Together.ai | Better on genuinely ambiguous navigation; higher cost per call. |
 | Claude Haiku | Anthropic | Fast and cost-effective; strong instruction following. |
-| Llama 3 8B Instruct | Ollama (local) | Default for self-hosted deployments via `LocalAdapter`. Like-for-like with Groq default. |
-| Phi-3 Mini | Ollama (local) | Lighter option for hosts with limited RAM. Verify structured output reliability empirically before relying on it. |
+| DeepSeek R1 14B | Ollama (local) | Default for self-hosted deployments via `LocalAdapter`. Strong structured output compliance; reasoning trace helps on ambiguous pages. |
+| Llama 3 8B Instruct | Ollama (local) | Lighter option; reliable structured output on simpler navigation goals. |
+| Phi-3 Mini | Ollama (local) | Minimal RAM footprint. Verify structured output reliability empirically before relying on it. |
 
 Structured output reliability varies by model and tends to be less consistent in smaller models, but this is an empirical question — a model that reliably produces valid structured JSON in Charlotte's specific navigation context passes regardless of parameter count. Charlotte's adapter validation test suite is the right tool for evaluating any candidate model.
 
@@ -429,6 +430,8 @@ When a navigation plausibility check fails, Charlotte logs the failure with full
 The final integrity gate before any URL is promoted to trusted result data.
 
 **For `result_url`:** When the model reports `found=True` and returns a `result_url`, that URL must appear verbatim in the link list extracted from the current page by the content extractor. If it does not, the model has either hallucinated a URL or been manipulated into fabricating a destination. This is a hard rejection — Charlotte does not retry, does not follow the URL, and does not return it. The page is treated as `found=False`, the failure is logged with full detail, and the crawl continues.
+
+**Exception — fact-extraction goals:** When the model reports `found=True` and also returns a non-null `answer` (a verbatim fact copied from the page), the result by definition lives on the *current* page. In this case Charlotte overrides `result_url` to the current page URL before the provenance check, regardless of what the model returned. This override is applied silently: models reliably hallucinate `result_url` on fact goals while correctly extracting the answer value, and the right URL to return to the caller is always the page being evaluated. The override happens before provenance, so provenance always passes on fact goals (the current page URL is always in the extracted link list). The hard-rejection rule above applies only to navigation goals (`answer` is null).
 
 **For `links_to_follow`:** Every URL in the model's recommended link list is cross-checked against the extracted link list before being enqueued. Any URL not present in the extracted list is silently dropped.
 

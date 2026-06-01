@@ -127,8 +127,12 @@ async def _collect_events(gen) -> list:
 # Config validation — eager, before any I/O
 # ---------------------------------------------------------------------------
 
-def test_no_model_raises_config_error():
-    with pytest.raises(CharlotteConfigError, match="No model adapter provided"):
+def test_no_model_uses_default_adapter(monkeypatch):
+    # model=None resolves via CharlotteConfig; GroqAdapter raises CharlotteConfigError
+    # when GROQ_API_KEY is absent — confirming the resolution path runs correctly.
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("CHARLOTTE_DEFAULT_ADAPTER", raising=False)
+    with pytest.raises(CharlotteConfigError, match="Groq API key"):
         crawl(_START, _GOAL, model=None)
 
 

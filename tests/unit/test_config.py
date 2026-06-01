@@ -53,7 +53,7 @@ def test_local_base_url_env(monkeypatch):
 
 def test_local_model_default(monkeypatch):
     monkeypatch.delenv("CHARLOTTE_LOCAL_MODEL", raising=False)
-    assert CharlotteConfig.local_model() == "llama3:8b"
+    assert CharlotteConfig.local_model() == "deepseek-r1:14b"
 
 
 def test_local_model_env(monkeypatch):
