@@ -6,7 +6,7 @@ streaming events are importable directly from this package:
     from charlotte import crawl, find_link, CrawlResult, CharlotteError, CrawlStarted
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 from charlotte.core.engine import crawl
 from charlotte.core.find_link import find_link
