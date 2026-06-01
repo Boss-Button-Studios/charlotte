@@ -25,42 +25,45 @@ _GOAL = "find the target"
 # T-31  Factual goal — answer populated verbatim by the model.
 # ---------------------------------------------------------------------------
 
+_PHONE = "(858) 966-1700"
+
+
 @respx.mock
 async def test_t31_factual_answer_returned_in_result_and_event():
     """T-31: Model populates answer for a factual goal; returned in CrawlResult.answers and ResultFound."""
-    respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
+    respx.get(_START).mock(return_value=httpx.Response(200, text=page(extra=_PHONE)))
 
     result = await crawl(
         _START, _GOAL,
         model=seq(nav(
             found=True, confidence=0.95, result_url=_START, links=[],
-            answer="(858) 966-1700",
+            answer=_PHONE,
         )),
         stream=False, respect_robots=False, default_delay=0,
     )
 
     assert isinstance(result, CrawlResult)
     assert result.found
-    assert result.answers == ["(858) 966-1700"]
+    assert result.answers == [_PHONE]
 
 
 @respx.mock
 async def test_t31_answer_in_result_found_event():
     """T-31: ResultFound event carries the answer field when the model extracts one."""
-    respx.get(_START).mock(return_value=httpx.Response(200, text=page()))
+    respx.get(_START).mock(return_value=httpx.Response(200, text=page(extra=_PHONE)))
 
     events = await collect(crawl(
         _START, _GOAL,
         model=seq(nav(
             found=True, confidence=0.95, result_url=_START, links=[],
-            answer="(858) 966-1700",
+            answer=_PHONE,
         )),
         stream=True, respect_robots=False, default_delay=0,
     ))
 
     result_events = [e for e in events if isinstance(e, ResultFound)]
     assert len(result_events) == 1
-    assert result_events[0].answer == "(858) 966-1700"
+    assert result_events[0].answer == _PHONE
 
 
 # ---------------------------------------------------------------------------

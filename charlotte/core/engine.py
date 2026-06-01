@@ -389,12 +389,15 @@ async def _crawl_core(
         # copied from the page". Verify it appears (after whitespace normalization)
         # in the extracted text or title before promotion.
         if effective_found and output.answer is not None:
-            full_text = (extracted.title + "\n" + extracted.text).casefold()
+            full_text = re.sub(
+                r"\s+", " ", f"{extracted.title}\n{extracted.text}".strip()
+            ).casefold()
             norm_answer = re.sub(r"\s+", " ", output.answer.strip()).casefold()
             if norm_answer and norm_answer not in full_text:
                 logger.debug(
-                    "Answer content gate rejected %r at %r: answer not in page text",
-                    output.answer[:80], page.url,
+                    "Answer content gate rejected at %r: normalized answer missing "
+                    "from page text (answer_length=%d)",
+                    page.url, len(output.answer),
                 )
                 effective_found = False
                 effective_result_url = None

@@ -904,3 +904,27 @@ async def test_answer_content_gate_passes_when_answer_in_title():
 
     assert result.found is True
     assert result.answers == [_PHONE]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_answer_content_gate_whitespace_normalization():
+    """answer split across extra whitespace in page text is still accepted."""
+    _mock_404_robots()
+    # Embed the phone with extra internal spaces so normalization is required
+    spaced_phone = "555 -  867 -  5309"
+    html = (
+        f'<html><body><p>{_WORDS}</p>'
+        f'<p>Number:  {spaced_phone}</p>'
+        '</body></html>'
+    )
+    respx.get(_START).mock(return_value=httpx.Response(200, html=html))
+
+    # Model returns the number with standard formatting
+    result = await crawl(
+        _START, "Find the phone number",
+        model=_adapter_fact_answer("555 - 867 - 5309"),
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is True
