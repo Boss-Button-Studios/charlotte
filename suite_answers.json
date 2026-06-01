@@ -1,0 +1,66 @@
+{
+  "_comment": "Expected outcomes for suite_test.py trials. Used by score_suite.py.",
+  "_schema": {
+    "found": "bool — expected CrawlComplete.found value",
+    "answer_contains": "list[str] | null — answer passes if ANY item is a substring of the actual answer (case-insensitive); null means the goal is navigational and no specific answer value is expected",
+    "result_url_contains": "str | null — expected substring in the result URL; null means not checked",
+    "note": "Human-readable correct answer or rationale"
+  },
+  "version": "1",
+  "trials": {
+    "python_tutorial_page": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "docs.python.org",
+      "note": "docs.python.org/3/tutorial/ or equivalent beginner tutorial page"
+    },
+    "python_pep_index": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "python.org",
+      "note": "peps.python.org or python.org/dev/peps — the PEP index"
+    },
+    "python_glossary": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "docs.python.org",
+      "note": "docs.python.org/3/glossary.html"
+    },
+    "iana_about": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "iana.org",
+      "note": "iana.org/about — the About IANA page"
+    },
+    "lz_zen_author": {
+      "found": true,
+      "answer_contains": ["Tim Peters"],
+      "result_url_contains": null,
+      "note": "PEP 20 (Zen of Python) was authored by Tim Peters"
+    },
+    "lz_pep8_title": {
+      "found": true,
+      "answer_contains": ["Style Guide for Python Code"],
+      "result_url_contains": null,
+      "note": "PEP 8 title is 'Style Guide for Python Code'"
+    },
+    "lz_iana_root_count": {
+      "found": true,
+      "answer_contains": ["13"],
+      "result_url_contains": null,
+      "note": "There are 13 root name server operators (a through m .root-servers.net)"
+    },
+    "lz_pep8_created_year": {
+      "found": true,
+      "answer_contains": ["2001"],
+      "result_url_contains": null,
+      "note": "PEP 8 was created 05-Jul-2001"
+    },
+    "python_json_parse_fn": {
+      "found": true,
+      "answer_contains": ["loads", "json.loads"],
+      "result_url_contains": null,
+      "note": "json.loads() is the function for parsing a JSON string in Python"
+    }
+  }
+}

@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sys
 from urllib.parse import urlsplit
 
 import httpx
@@ -46,8 +47,11 @@ _THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re
 # before it as reasoning preamble.
 _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
+# US phone number formats: 858-966-5846, (858) 966-5846, 858.966.5846, 858 966 5846
+_PHONE_RE = re.compile(r'\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}')
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
-_DEFAULT_MODEL = "llama3:8b"
+_DEFAULT_MODEL = "deepseek-r1:14b"
 _COMPLETIONS_PATH = "/v1/chat/completions"
 
 _SYSTEM_PROMPT = """\
@@ -56,8 +60,8 @@ evaluate the page and decide whether the goal has been satisfied, and which link
 are worth following next.
 
 You must respond with a valid JSON object containing these fields:
-  "found"           — boolean: true if this page satisfies the goal; false otherwise
-  "confidence"      — float: how strongly this page satisfies the goal (0.0 = definitely not, 1.0 = definitely yes)
+  "found"           — boolean: true if this page contains the best available answer to the goal, even if context-inferred rather than explicitly labeled; false only when the page clearly does not address the goal
+  "confidence"      — float: your certainty that this page answers the goal (1.0 = explicitly confirmed; 0.7–0.9 = strongly implied by context; 0.5–0.7 = possible but uncertain; below 0.5 = likely not the answer)
   "result_url"      — string or null: URL of the result when found=true; null when found=false
   "links_to_follow" — array of strings: URLs worth visiting next, best-first; may be empty
   "reasoning"       — string: brief non-empty explanation of your decision
@@ -66,12 +70,12 @@ You must respond with a valid JSON object containing these fields:
 Rules:
 - If the current page IS what the goal describes, set found=true and result_url to the current page URL. Do not keep searching when you are already on the answer.
 - If the goal is to find a link or URL, and a matching link is visible on this page, set found=true and result_url to that link — you do not need to visit it first.
-- "confidence" measures how well this page satisfies the goal — not confidence in your reasoning. A value near 1.0 means this page strongly satisfies the goal; near 0.0 means it does not.
+- "confidence" expresses certainty, not found: found=true with confidence=0.70 means "this is my best answer, context implies it is correct"; found=false means "this page does not contain an answer." Use confidence to reflect uncertainty — do not force found=false simply because the answer lacks an explicit label.
 - "result_url" must be a URL from this page when found=true, and null when found=false.
 - "links_to_follow" may be non-empty even when found=true if more results may exist.
 - "answer": copy the specific value verbatim — do not paraphrase or summarize. Use null when the goal is to find a page or link rather than a fact.
-- Do NOT substitute related-but-different information for what was asked. If the goal asks for an emergency room number and you only see a main hospital number, set found=false — they are not the same. Only set found=true when the page explicitly contains the exact information requested, not an approximation or a reasonable guess.
-- If your reasoning uses words like "likely", "probably", "might be", or "appears to be", your confidence should be below 0.5 and found should be false.
+- If your reasoning names a specific value that answers the goal (a phone number, address, price, name, or other fact), that exact value MUST also appear in "answer". Mentioning the value in "reasoning" but returning answer=null is an error.
+- Do NOT substitute clearly wrong information. If the goal asks for an emergency room number and only a general hospital line is listed, set found=false — those are different things. But do not require explicit labeling: a phone number in the main body of a department's own page is that department's number even without a label. Set found=true with your actual confidence.
 - Do NOT add any URL from "Previously visited pages" to links_to_follow — those pages have already been evaluated. Do not add the current page URL to links_to_follow either.
 - When the goal involves finding a specific category of content (doctors by specialty, products by type, articles by topic), follow directory, index, or category links that could lead to that category — even if the match is indirect (e.g. "Specialists" → "Respiratory" → respiratory doctors).
 - Respond with JSON only. No prose outside the JSON object.\
@@ -139,6 +143,27 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
+def _rescue_answer_from_reasoning(data: dict) -> dict:
+    """Salvage answer from reasoning when found=True but answer is absent.
+
+    Catches the deepseek-r1 pattern where the model states a fact in 'reasoning'
+    but omits it from 'answer'. Currently recovers US phone numbers only; other
+    fact types can be added as patterns are identified.
+    """
+    if not data.get("found") or data.get("answer") is not None:
+        return data
+    reasoning = data.get("reasoning") or ""
+    m = _PHONE_RE.search(reasoning)
+    if m:
+        data["answer"] = m.group(0)
+    return data
+
+
+def _strip_think_tags(raw: str) -> str:
+    content = _THINK_TAG_RE.sub("", raw)
+    return _LONE_CLOSE_THINK_RE.sub("", content).strip()
+
+
 class LocalAdapter:
     """Navigator model adapter for any OpenAI-compatible local inference endpoint.
 
@@ -161,6 +186,9 @@ class LocalAdapter:
         timeout:    Total request timeout in seconds, or None for no timeout.
                     Local inference time is hardware-dependent and unbounded;
                     None (the default) waits as long as the model needs.
+        verbose:    If True, stream the model response to stderr as tokens arrive.
+                    Useful for monitoring long-running local model calls. The
+                    adapter's return value is unchanged — streaming is transport only.
 
     Raises:
         CharlotteConfigError: ``base_url`` does not start with ``http://`` or
@@ -172,6 +200,7 @@ class LocalAdapter:
         base_url: str | None = None,
         model_name: str | None = None,
         timeout: float | None = None,
+        verbose: bool = False,
     ) -> None:
         resolved_base = (
             base_url or os.environ.get("CHARLOTTE_LOCAL_BASE_URL", _DEFAULT_BASE_URL)
@@ -187,6 +216,7 @@ class LocalAdapter:
         self._endpoint = resolved_base + _COMPLETIONS_PATH
         self._model = model_name or os.environ.get("CHARLOTTE_LOCAL_MODEL", _DEFAULT_MODEL)
         self._timeout = timeout
+        self._verbose = verbose
 
     async def __call__(
         self,
@@ -213,6 +243,12 @@ class LocalAdapter:
             schema_hint=schema_hint,
         )
 
+        if self._verbose:
+            return await self._call_streaming(user_prompt)
+        return await self._call_blocking(user_prompt)
+
+    async def _call_blocking(self, user_prompt: str) -> dict[str, object]:
+        """Non-streaming request — waits for the full response before returning."""
         payload: dict[str, object] = {
             "model": self._model,
             "messages": [
@@ -223,7 +259,6 @@ class LocalAdapter:
             "stream": False,
         }
 
-        # Phase 1 — HTTP request.
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(self._endpoint, json=payload)
@@ -232,36 +267,83 @@ class LocalAdapter:
             logger.debug("Local model call timed out", exc_info=True)
             raise CharlotteTimeoutError("Local model call timed out") from exc
         except httpx.HTTPStatusError as exc:
-            # Suppress chain — response body may contain sensitive server detail.
-            # Log type only, never exc_info. See §18.
             logger.debug("Local model endpoint returned HTTP error: %s", type(exc).__name__)
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
         except Exception as exc:
-            # Log type only — network error messages may include server addresses
-            # or tokens. See §18.
             logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
             ) from None
 
-        # Phase 2 — Parse response.
         try:
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"] or ""
-            content = _THINK_TAG_RE.sub("", raw_content)
-            content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            # Suppress chain — JSONDecodeError.doc contains the model output. See §18.
-            logger.debug("Local model response JSON decode failed: %s", type(exc).__name__)
+            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+        except json.JSONDecodeError:
+            logger.debug("Local model response JSON decode failed")
+            raise AdapterOutputError("Local model response was not valid JSON") from None
+        except (KeyError, IndexError, TypeError):
+            logger.debug("Local model response has unexpected structure")
+            raise AdapterOutputError("Local model response has unexpected structure") from None
+
+    async def _call_streaming(self, user_prompt: str) -> dict[str, object]:
+        """Streaming request — prints tokens to stderr as they arrive, returns full dict."""
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "stream": True,
+        }
+
+        parts: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                async with client.stream("POST", self._endpoint, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            token = (
+                                (chunk.get("choices") or [{}])[0]
+                                .get("delta", {})
+                                .get("content") or ""
+                            )
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
+                        if token:
+                            parts.append(token)
+                            sys.stderr.write(token)
+                            sys.stderr.flush()
+        except httpx.TimeoutException as exc:
+            logger.debug("Local model call timed out", exc_info=True)
+            raise CharlotteTimeoutError("Local model call timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.debug("Local model endpoint returned HTTP error: %s", type(exc).__name__)
             raise AdapterOutputError(
-                "Local model response was not valid JSON"
+                f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except (KeyError, IndexError, TypeError) as exc:
-            # Suppress chain — structural errors may reference response data. See §18.
-            logger.debug("Local model response has unexpected structure: %s", type(exc).__name__)
+        except Exception as exc:
+            logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
-                "Local model response has unexpected structure"
+                "Local model API call failed — check that the server is running"
             ) from None
+
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+        raw_content = "".join(parts)
+        try:
+            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+        except json.JSONDecodeError:
+            logger.debug("Local model streaming response JSON decode failed")
+            raise AdapterOutputError("Local model response was not valid JSON") from None

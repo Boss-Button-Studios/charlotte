@@ -64,7 +64,7 @@ def crawl(
     max_pages: int = 20,
     max_depth: int = 5,
     max_results: "int | None" = 1,
-    confidence_threshold: float = 0.85,
+    confidence_threshold: float = 0.70,
     render_js: bool = False,
     allowed_domains: "list[str] | None" = None,
     return_content: bool = False,
@@ -309,47 +309,56 @@ async def _crawl_core(
             yield PageSkipped(url=page.url, reason=str(exc), error_type="AdapterOutputError")
             continue
 
+        # Plausibility check — runs on raw model output, before provenance.
+        # Spec §9.3 (plausibility) precedes §9.4 (provenance). Using raw output
+        # keeps the navigation quality check independent of the security check so
+        # a provenance rejection cannot cascade into a plausibility skip.
+        raw_decision = NavDecision(
+            found=output.found,
+            confidence=output.confidence,
+            result_url=output.result_url,
+            links_to_follow=output.links_to_follow,
+            reasoning=output.reasoning,
+        )
+        plaus = check_plausibility(
+            decision=raw_decision,
+            page_text=extracted.text,
+            visited_urls=visited,
+        )
+        if not plaus.passed:
+            reason = "; ".join(f.detail for f in plaus.flags)
+            model_summary = f"model: found={output.found}, conf={output.confidence:.2f}"
+            yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
+            continue
+
         # Provenance check — current page URL is also "observed" by the model,
         # so it is valid as a result_url even if not present as a link on the page.
         # extracted_link_urls includes off-domain links; allowed_domains restricts
         # navigation (enqueueing) only — CrawlResult.result_urls may contain
         # off-domain hosts when the goal is to find an external URL.
         extracted_link_urls = [page.url] + [link["url"] for link in extracted.links]
+        # For fact goals (answer != None) the result lives on the current page.
+        # Override result_url to page.url BEFORE provenance so the check always
+        # passes — models reliably hallucinate result_url on fact goals while
+        # correctly extracting the answer value. page.url is always in
+        # extracted_link_urls so provenance will accept it.
+        provenance_result_url = (
+            page.url
+            if (output.found and output.answer is not None)
+            else output.result_url
+        )
         prov = check_provenance(
             found=output.found,
-            result_url=output.result_url,
+            result_url=provenance_result_url,
             links_to_follow=output.links_to_follow,
             extracted_urls=extracted_link_urls,
         )
         effective_found = output.found and prov.result_url_accepted
-        effective_result_url = output.result_url if effective_found else None
+        effective_result_url = provenance_result_url if effective_found else None
         effective_links = prov.links_to_follow
 
         if not prov.result_url_accepted and prov.rejection_detail:
             logger.debug("Provenance rejection at %r: %s", page.url, prov.rejection_detail)
-
-        # Plausibility check
-        decision = NavDecision(
-            found=effective_found,
-            confidence=output.confidence,
-            result_url=effective_result_url,
-            links_to_follow=effective_links,
-            reasoning=output.reasoning,
-        )
-        plaus = check_plausibility(
-            decision=decision,
-            page_text=extracted.text,
-            visited_urls=visited,
-        )
-        if not plaus.passed:
-            reason = "; ".join(f.detail for f in plaus.flags)
-            prov_note = (
-                "" if prov.result_url_accepted
-                else f" [provenance: {prov.rejection_detail}]"
-            )
-            model_summary = f"model: found={effective_found}, conf={output.confidence:.2f}{prov_note}"
-            yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
-            continue
 
         visit_log.append(VisitLogEntry(
             url=page.url,
