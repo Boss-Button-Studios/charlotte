@@ -70,7 +70,10 @@ def find_link(
     Args:
         start_url:            Absolute URL at which to begin.
         goal:                 Natural language description of what to find.
-        model:                Adapter callable. Raises CharlotteConfigError if None.
+        model:                Adapter callable. None resolves via
+                              CHARLOTTE_DEFAULT_ADAPTER (default: GroqAdapter).
+                              Raises CharlotteConfigError if the resolved adapter
+                              cannot be configured (e.g. missing GROQ_API_KEY).
         max_pages:            Hard ceiling on total pages fetched.
         max_depth:            Maximum link-hops from start_url.
         confidence_threshold: Minimum model confidence to record a result (0–1).
@@ -80,7 +83,9 @@ def find_link(
         navigation_hint:      Extra context passed to the model alongside the goal.
         stream:               True → return AsyncGenerator of events.
                               False → return coroutine resolving to LinkResult.
-        respect_robots:       Fetch and obey robots.txt before crawling.
+                              None → read CHARLOTTE_STREAM (default: True).
+        respect_robots:       True/False overrides CHARLOTTE_RESPECT_ROBOTS.
+                              None → read CHARLOTTE_RESPECT_ROBOTS (default: True).
         connect_timeout:      TCP connection timeout for HTTP requests (seconds).
         read_timeout:         Response body read timeout (seconds).
         render_timeout:       Seconds to wait for JS to settle after navigation (seconds).

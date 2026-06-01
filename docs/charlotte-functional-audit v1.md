@@ -70,7 +70,7 @@ Verified empirically: building the GroqAdapter prompt with a page summary contai
 
 **Code (`charlotte/core/engine.py` lines 123–126):**
 
-```
+```python
 if model is None:
     raise CharlotteConfigError(
         "No model adapter provided. Pass model=LocalAdapter() or model=GroqAdapter()."
@@ -194,7 +194,7 @@ The `_rescue_answer_from_reasoning` helper (lines 146–159) is a US-phone-numbe
 
 **Code (`charlotte/core/engine.py` lines 340–349):**
 
-```
+```python
 # For fact goals (answer != None) the result lives on the current page.
 # Override result_url to page.url BEFORE provenance so the check always
 # passes — models reliably hallucinate result_url on fact goals while
