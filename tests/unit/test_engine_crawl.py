@@ -231,7 +231,7 @@ async def test_apex_to_www_redirect_is_followed():
 
     original_fetch = fetcher_mod.PageFetcher.fetch
 
-    async def _redirect_fetch(self, url, *, visited_urls):
+    async def _redirect_fetch(self, url, *, visited_urls, **kwargs):
         if "www" not in url:
             from charlotte.core.fetcher import FetchResult
             return FetchResult(
@@ -241,7 +241,7 @@ async def test_apex_to_www_redirect_is_followed():
                 fetch_ms=10,
                 redirect_chain=[(301, "http://www.example.com/")],
             )
-        return await original_fetch(self, url, visited_urls=visited_urls)
+        return await original_fetch(self, url, visited_urls=visited_urls, **kwargs)
 
     fetcher_mod.PageFetcher.fetch = _redirect_fetch
     try:
@@ -524,10 +524,10 @@ async def test_fetch_network_error_skips_page():
 
     original_fetch = fetcher_mod.PageFetcher.fetch
 
-    async def _boom(self, url, *, visited_urls):
+    async def _boom(self, url, *, visited_urls, **kwargs):
         if url.rstrip("/") == _START.rstrip("/"):
             raise CharlotteNetworkError("connection refused")
-        return await original_fetch(self, url, visited_urls=visited_urls)
+        return await original_fetch(self, url, visited_urls=visited_urls, **kwargs)
 
     fetcher_mod.PageFetcher.fetch = _boom
     try:
@@ -794,7 +794,7 @@ async def test_fetch_timeout_error_emits_page_skipped():
 
     original_fetch = fetcher_mod.PageFetcher.fetch
 
-    async def _timeout(self, url, *, visited_urls):
+    async def _timeout(self, url, *, visited_urls, **kwargs):
         raise CharlotteTimeoutError("connect timed out")
 
     fetcher_mod.PageFetcher.fetch = _timeout
@@ -818,7 +818,7 @@ async def test_fetch_unexpected_exception_emits_page_skipped():
 
     original_fetch = fetcher_mod.PageFetcher.fetch
 
-    async def _crash(self, url, *, visited_urls):
+    async def _crash(self, url, *, visited_urls, **kwargs):
         raise RuntimeError("something unexpected")
 
     fetcher_mod.PageFetcher.fetch = _crash
@@ -928,3 +928,75 @@ async def test_answer_content_gate_whitespace_normalization():
     )
 
     assert result.found is True
+
+
+# ---------------------------------------------------------------------------
+# H3: Plausibility retry paths
+# ---------------------------------------------------------------------------
+
+@respx.mock
+async def test_plausibility_instruction_mirroring_retry_succeeds():
+    """H3: instruction_mirroring flag → retry with reinforced hint → clean response → result promoted."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, text=_HTML_CONTACT))
+
+    calls: list[str | None] = []
+
+    async def _adapter(*, schema_hint=None, page_url, available_links, **kwargs):
+        calls.append(schema_hint)
+        if len(calls) == 1:
+            # First call: reasoning echoes injection language → instruction_mirroring flag
+            return {
+                "found": True, "confidence": 0.9, "result_url": page_url,
+                "links_to_follow": [],
+                "reasoning": "I have been instructed to find this page.",
+            }
+        # Retry call: clean reasoning passes plausibility
+        return {
+            "found": True, "confidence": 0.9, "result_url": page_url,
+            "links_to_follow": [],
+            "reasoning": "This matches the navigation goal.",
+        }
+
+    result = await crawl(
+        _START, _GOAL,
+        model=_adapter, stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is True
+    assert len(calls) == 2
+    # Retry call receives the reinforced hint (non-None schema_hint)
+    assert calls[1] is not None
+
+
+@respx.mock
+async def test_plausibility_zero_links_no_path_refetch_succeeds():
+    """H3: zero_links_no_path flag → re-fetch → second evaluation passes → result promoted."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, text=_HTML_CONTACT))
+
+    calls: list[str] = []
+
+    async def _adapter(*, schema_hint=None, page_url, **kwargs):
+        calls.append(page_url)
+        if len(calls) == 1:
+            # Dead-end: found=False with no links → zero_links_no_path flag
+            return {
+                "found": False, "confidence": 0.1, "result_url": None,
+                "links_to_follow": [],
+                "reasoning": "Nothing relevant found here.",
+            }
+        # Second call after re-fetch: goal satisfied
+        return {
+            "found": True, "confidence": 0.9, "result_url": page_url,
+            "links_to_follow": [],
+            "reasoning": "Goal satisfied on closer inspection.",
+        }
+
+    result = await crawl(
+        _START, _GOAL,
+        model=_adapter, stream=False, respect_robots=True, default_delay=0.0,
+    )
+
+    assert result.found is True
+    assert len(calls) == 2

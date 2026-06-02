@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -27,6 +28,9 @@ from charlotte.exceptions import (
     CharlotteRedirectError,
     CharlotteTimeoutError,
 )
+
+if TYPE_CHECKING:
+    from charlotte.core.robots import RobotsHandler
 
 _MAX_REDIRECTS: int = 5
 
@@ -107,13 +111,23 @@ class PageFetcher:
     def _is_allowed(self, url: str) -> bool:
         return self._hostname(url) in self._allowed_domains
 
-    async def fetch(self, url: str, *, visited_urls: set[str]) -> FetchResult:
+    async def fetch(
+        self,
+        url: str,
+        *,
+        visited_urls: set[str],
+        robots_handler: "RobotsHandler | None" = None,
+        default_delay: float = 0.0,
+    ) -> FetchResult:
         """Fetch a page, following redirects per spec §8.2.
 
         Args:
             url: Absolute URL to fetch. Must be within allowed_domains.
             visited_urls: Normalized URLs already visited this crawl — used for
                           redirect-loop detection.
+            robots_handler: When provided, checked against the destination domain
+                            whenever a redirect crosses a host boundary (spec §11.1).
+            default_delay: Passed to robots_handler.check() for crawl-delay resolution.
 
         Returns:
             FetchResult with the final URL, HTML, status code, timing, and redirect chain.
@@ -124,6 +138,7 @@ class PageFetcher:
                                    or other network error.
             CharlotteRedirectError: Redirect chain exceeds 5 hops, crosses into a
                                     disallowed domain, or forms a loop (httpx path only).
+            RobotsError: Cross-domain redirect target disallowed by robots.txt.
             CharlotteConfigError: Malformed URL.
         """
         await asyncio.sleep(self._polite_delay)
@@ -217,6 +232,14 @@ class PageFetcher:
                         f"Redirect from {current_url!r} to {destination!r} "
                         f"crosses into disallowed domain {self._hostname(destination)!r}"
                     )
+
+                # Cross-domain robots check — spec §11.1: permissions do not
+                # inherit across domain boundaries.
+                if (
+                    robots_handler is not None
+                    and self._hostname(destination) != self._hostname(current_url)
+                ):
+                    await robots_handler.check(destination, default_delay)
 
                 try:
                     norm_dest = normalize_url(destination)

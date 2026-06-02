@@ -59,6 +59,7 @@ def find_link(
     read_timeout: float = 30.0,
     render_timeout: float = 15.0,
     default_delay: float = 1.0,
+    chromium_executable: "str | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
@@ -90,6 +91,10 @@ def find_link(
         read_timeout:         Response body read timeout (seconds).
         render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
         default_delay:        Floor for the polite inter-request delay (seconds).
+        chromium_executable:  Path to a Chromium/Chrome binary, used only when
+                              render_js=True. Overrides Playwright's bundled
+                              Chromium — needed on OS versions Playwright
+                              doesn't yet package a bundled binary for.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
@@ -114,6 +119,7 @@ def find_link(
         read_timeout=read_timeout,
         render_timeout=render_timeout,
         default_delay=default_delay,
+        chromium_executable=chromium_executable,
     )
 
     resolved_stream = CharlotteConfig.stream() if stream is None else stream

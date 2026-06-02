@@ -138,7 +138,7 @@ The minimum confidence the navigator model must report before Charlotte records 
 If True, Charlotte uses Playwright to fetch and render pages, capturing JavaScript-generated content. Slower and heavier but necessary for sites that render navigation in JS. Requires Playwright to be installed.
 
 **`allowed_domains`** *(list of strings, default: domain of `start_url` only)*
-Restricts navigation to the listed domains. Charlotte will never follow a link outside this list.
+Restricts navigation to the listed domains. Charlotte will never follow a link outside this list. The default also automatically includes the `www.`/non-`www.` counterpart of the start hostname (e.g. if `start_url` is `https://example.com`, both `example.com` and `www.example.com` are allowed). This prevents apex→www or www→apex redirects on the entry URL from immediately raising `CharlotteRedirectError`.
 
 **`return_content`** *(bool, default: False)*
 If True, Charlotte returns not just the found URLs but also the sanitized visible text content of each found page.
@@ -200,7 +200,7 @@ The model receives:
 
 - **Goal** — the natural language goal from the caller, plus any `navigation_hint`
 - **Current page** — title, URL, and a cleaned summary of visible text (not raw HTML)
-- **Available links** — a list of `{text, url}` pairs for links on the current page, filtered to the allowed domains
+- **Available links** — a list of `{text, url}` pairs for all observable links on the current page (deduplicated, not domain-filtered). Domain and visited-URL filtering are applied later at the engine's enqueue step.
 - **Visit history** — a brief list of pages already visited, to prevent loops
 - **Results so far** — count of results already found in this crawl (relevant when `max_results` > 1)
 
@@ -415,15 +415,15 @@ The goal and `navigation_hint` from the caller are passed outside the `<page_con
 
 Applied to the model's output before Charlotte acts on it. Charlotte's navigation decisions have a predictable shape — they should make sense given the goal, the current depth, and the visit history. Decisions that don't fit that shape indicate the model may have been influenced by page content.
 
-Flags that trigger a skip-and-log rather than follow:
+Flags that trigger a retry-or-skip rather than follow:
 
-- Recommended links point to domains outside `allowed_domains` (should be caught earlier, but verified again here)
-- Recommended links were already visited in this crawl
-- The model's `reasoning` field contains language that mirrors instruction-following rather than navigation reasoning (e.g. "I have been instructed to...", "my new goal is...")
-- Confidence spikes dramatically on a page with thin or irrelevant visible content — a signal that hidden content may have influenced the decision
+- The model's `reasoning` field contains language that mirrors instruction-following rather than navigation reasoning (e.g. "I have been instructed to...", "my new goal is...") — Charlotte retries with a reinforced system prompt before skipping
+- Confidence spikes dramatically on a page with thin or irrelevant visible content — a signal that hidden content may have influenced the decision — Charlotte retries with a reinforced system prompt before skipping
 - The model recommends zero links and reports `found=False` with no explanation — Charlotte re-fetches the page once before abandoning it
 
-When a navigation plausibility check fails, Charlotte logs the failure with full detail, discards the model's output for that page, and either retries with a reinforced system prompt or moves on to the next queued link.
+When a navigation plausibility check fails, Charlotte logs the failure with full detail, discards the model's output for that page, and either retries with a reinforced system prompt (for `instruction_mirroring` and `confidence_spike` flags) or re-fetches and re-evaluates once (for `zero_links_no_path`). If the second attempt also fails, the page is skipped and the crawl continues.
+
+Off-domain and already-visited URLs in `links_to_follow` are not plausibility flags — they are handled at the engine's enqueue step, which silently drops any URL outside `allowed_domains` or already in the visited set. The model legitimately sees and reports all observable links; filtering is the engine's responsibility, not the model's.
 
 ### 9.4 URL Provenance Check
 
@@ -472,8 +472,8 @@ Converts sanitized page content into the structured input the navigator model re
 
 - Extracts visible text — what a human reading the page would see, after sanitization
 - Extracts all links as `{text, url}` pairs, resolved to absolute URLs
-- Filters links to `allowed_domains`
 - Deduplicates links
+- Domain filtering to `allowed_domains` happens at the engine's enqueue step after the model has evaluated the page — the extractor returns all observable links so the model can reason about the full link landscape, including external references
 - Truncates to a token budget before passing to the model — the navigator does not need the full text of a long page to make a routing decision
 
 The content extractor operates on already-sanitized content. It is not responsible for security — that is the sanitizer's job. Its only concern is producing a clean, compact, useful representation of the page for the model.

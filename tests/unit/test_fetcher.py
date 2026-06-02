@@ -17,6 +17,7 @@ from charlotte.exceptions import (
     CharlotteNetworkError,
     CharlotteRedirectError,
     CharlotteTimeoutError,
+    RobotsError,
 )
 
 _BASE = "http://example.com"
@@ -441,3 +442,78 @@ async def test_invalid_redirect_destination_raises_redirect_error():
     ]):
         with pytest.raises(CharlotteRedirectError, match="not a valid URL"):
             await _fetcher().fetch(f"{_BASE}/page", visited_urls=set())
+
+
+# ---------------------------------------------------------------------------
+# H2: Cross-domain redirect triggers robots_handler.check()
+# ---------------------------------------------------------------------------
+
+@respx.mock
+async def test_cross_domain_redirect_calls_robots_handler():
+    """H2: A redirect that crosses host boundaries calls robots_handler.check() on the destination."""
+    respx.get(f"{_BASE}/page").mock(
+        return_value=httpx.Response(301, headers={"location": "http://www.example.com/page"})
+    )
+    respx.get("http://www.example.com/page").mock(
+        return_value=httpx.Response(200, text="<html><body>ok</body></html>")
+    )
+
+    check_calls: list[tuple[str, float]] = []
+
+    class _MockRobots:
+        async def check(self, url: str, default_delay: float) -> float:
+            check_calls.append((url, default_delay))
+            return default_delay
+
+    fetcher = PageFetcher(allowed_domains={"example.com", "www.example.com"}, polite_delay=0.0)
+    await fetcher.fetch(
+        f"{_BASE}/page",
+        visited_urls=set(),
+        robots_handler=_MockRobots(),
+        default_delay=0.5,
+    )
+
+    # Exactly one cross-domain check, for the www destination, with the correct delay
+    assert len(check_calls) == 1
+    assert check_calls[0] == ("http://www.example.com/page", 0.5)
+
+
+@respx.mock
+async def test_same_domain_redirect_skips_robots_handler():
+    """H2: A redirect staying on the same host does NOT call robots_handler.check()."""
+    respx.get(f"{_BASE}/a").mock(
+        return_value=httpx.Response(301, headers={"location": f"{_BASE}/b"})
+    )
+    respx.get(f"{_BASE}/b").mock(return_value=httpx.Response(200, text="<html><body>ok</body></html>"))
+
+    check_calls: list[str] = []
+
+    class _MockRobots:
+        async def check(self, url: str, default_delay: float) -> float:
+            check_calls.append(url)
+            return default_delay
+
+    await _fetcher().fetch(f"{_BASE}/a", visited_urls=set(), robots_handler=_MockRobots())
+
+    assert check_calls == []
+
+
+@respx.mock
+async def test_cross_domain_redirect_robots_blocked_raises():
+    """H2: robots_handler.check() rejecting the redirect destination raises RobotsError."""
+    respx.get(f"{_BASE}/page").mock(
+        return_value=httpx.Response(301, headers={"location": "http://www.example.com/page"})
+    )
+
+    class _BlockingRobots:
+        async def check(self, url: str, default_delay: float) -> float:
+            raise RobotsError(f"robots.txt disallows {url}")
+
+    fetcher = PageFetcher(allowed_domains={"example.com", "www.example.com"}, polite_delay=0.0)
+    with pytest.raises(RobotsError, match="robots.txt disallows"):
+        await fetcher.fetch(
+            f"{_BASE}/page",
+            visited_urls=set(),
+            robots_handler=_BlockingRobots(),
+            default_delay=0.0,
+        )
