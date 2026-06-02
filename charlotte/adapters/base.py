@@ -54,7 +54,10 @@ class AdapterProtocol(Protocol):
 
         Returns:
             Raw dict with keys: found, confidence, result_url,
-            links_to_follow, reasoning. Values are not validated by the
-            adapter — the engine applies §6.5 validation before acting.
+            links_to_follow, reasoning, answer. Values are not validated by
+            the adapter — the engine applies §6.5 validation before acting.
+            The ``answer`` field is optional: a verbatim fact string for
+            fact-extraction goals (phone, address, price, name), null for
+            navigation goals. See spec §6.2, §6.5.
         """
         ...

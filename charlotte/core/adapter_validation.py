@@ -168,6 +168,7 @@ async def call_with_validation(
     available_links: list[dict[str, str]],
     visit_history: list[str],
     results_so_far: int,
+    schema_hint: str | None = None,
 ) -> AdapterOutput:
     """Call an adapter, validate its output, and retry once with a schema hint.
 
@@ -203,9 +204,9 @@ async def call_with_validation(
         results_so_far=results_so_far,
     )
 
-    # First attempt — no schema hint
+    # First attempt — optional hint (None for normal calls; reinforced text for H3 retry)
     try:
-        raw = await adapter(schema_hint=None, **common)
+        raw = await adapter(schema_hint=schema_hint, **common)
     except AdapterOutputError:
         raise
     except Exception as exc:
