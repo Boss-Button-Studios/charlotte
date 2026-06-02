@@ -200,7 +200,7 @@ The model receives:
 
 - **Goal** — the natural language goal from the caller, plus any `navigation_hint`
 - **Current page** — title, URL, and a cleaned summary of visible text (not raw HTML)
-- **Available links** — a list of `{text, url}` pairs for links on the current page, filtered to the allowed domains
+- **Available links** — a list of `{text, url}` pairs for all observable links on the current page (deduplicated, not domain-filtered). Domain and visited-URL filtering are applied later at the engine's enqueue step.
 - **Visit history** — a brief list of pages already visited, to prevent loops
 - **Results so far** — count of results already found in this crawl (relevant when `max_results` > 1)
 

@@ -91,6 +91,10 @@ def find_link(
         read_timeout:         Response body read timeout (seconds).
         render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
         default_delay:        Floor for the polite inter-request delay (seconds).
+        chromium_executable:  Path to a Chromium/Chrome binary, used only when
+                              render_js=True. Overrides Playwright's bundled
+                              Chromium — needed on OS versions Playwright
+                              doesn't yet package a bundled binary for.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.

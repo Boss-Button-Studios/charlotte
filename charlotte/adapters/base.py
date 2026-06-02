@@ -44,8 +44,9 @@ class AdapterProtocol(Protocol):
             page_title: Title of the current page.
             page_url: URL of the current page.
             page_summary: Extracted visible text from the sanitized page.
-            available_links: List of {text, url} dicts for links on the page,
-                filtered to allowed_domains.
+            available_links: List of {text, url} dicts for all observable links
+                on the page (not domain-filtered). Domain and visited-URL
+                filtering are applied later at the engine's enqueue step.
             visit_history: Brief list of URLs already visited this crawl.
             results_so_far: Count of results found in this crawl so far.
             schema_hint: Optional schema reminder injected by the engine on a
