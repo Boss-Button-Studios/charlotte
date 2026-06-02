@@ -325,6 +325,12 @@ All Charlotte exceptions inherit from `CharlotteError`. Third-party exceptions (
 
 ---
 
+## Specification
+
+The full technical specification — adapter authoring guide, streaming events reference, security model, URL normalization rules — is at `docs/charlotte-spec-v1.4.md`.
+
+---
+
 ## Licence
 
 MIT — see `LICENSE`.

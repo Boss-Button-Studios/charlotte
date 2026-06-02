@@ -1,7 +1,7 @@
 # Charlotte — Technical Specification
 
-**Version:** 1.3
-**Status:** Ready for development
+**Version:** 1.4
+**Status:** Production
 **Org:** Boss Button Studios
 **Repo:** `Boss-Button-Studios/charlotte` (standalone — no consuming project dependencies)
 **PyPI:** `charlotte-crawler`
@@ -437,6 +437,8 @@ The final integrity gate before any URL is promoted to trusted result data.
 
 This check cannot be bypassed by plausible-looking output. A URL the model did not observe is a URL Charlotte will not touch.
 
+**Answer provenance — fact-extraction goals:** For fact-extraction goals the model is also required to copy the `answer` value verbatim from the visible page text. Charlotte enforces this with an answer content gate: after the URL provenance check passes, the model's `answer` is checked against the extracted page text and title (both whitespace-normalized and case-folded). If the normalized answer does not appear as a substring of the normalized page content, the model has either hallucinated the value or been influenced by content not in the visible text. This is a silent rejection — `found` is set to False, no `ResultFound` event is emitted, and the crawl continues. Navigation goals (`answer` is null) are unaffected by this gate.
+
 ### 9.5 URL Normalization
 
 The visited-set deduplication and provenance check both depend on URL equality comparisons. Without normalization, trivially equivalent URLs are treated as different — bypassing the visited-set and potentially the provenance check.
@@ -475,6 +477,16 @@ Converts sanitized page content into the structured input the navigator model re
 - Deduplicates links
 - Domain filtering to `allowed_domains` happens at the engine's enqueue step after the model has evaluated the page — the extractor returns all observable links so the model can reason about the full link landscape, including external references
 - Truncates to a token budget before passing to the model — the navigator does not need the full text of a long page to make a routing decision
+
+**Structural-zone ordering.** Both text and links are ordered by structural zone before truncation, so that page-specific content is always preferred over global site chrome when the budget is tight. Three zones are defined by the enclosing ancestor tag:
+
+- **Zone 0 — content:** enclosed by `<main>`, `<article>`, or `<section>`. Page-specific body content.
+- **Zone 1 — neutral:** everything else not in a content or chrome ancestor.
+- **Zone 2 — chrome:** enclosed by `<nav>`, `<header>`, or `<footer>`. Global navigation and site decoration.
+
+Text from zone 0 is emitted before zone 1 before zone 2. Links are stable-sorted by zone (DOM order preserved within each zone), then deduplicated keeping the highest-priority occurrence. A URL appearing in both `<main>` and `<nav>` is kept at its `<main>` position. This ensures that when truncation must drop something, it drops global navigation chrome rather than page-specific content — which matters most for fact-extraction goals where the relevant detail (a phone number, an address) is in the body, not the header.
+
+**Link cap.** The extractor caps the link list at 200 entries after zone-sorting and deduplication. Zone ordering makes the cap safe: the 200 links the model sees are always the most content-relevant ones. The cap is configurable via the `max_links` parameter on `extract()` for callers with strict token budgets.
 
 The content extractor operates on already-sanitized content. It is not responsible for security — that is the sanitizer's job. Its only concern is producing a clean, compact, useful representation of the page for the model.
 
@@ -849,6 +861,7 @@ Tests T-06 through T-33 use mocked HTTP, model responses, and filesystem — no 
 | 1.1 | v1.0 (SOME PIG) | Prompt hardening; two-layer model defence (plausibility guard + instruction mirroring) |
 | 1.2 | v1.0 (SOME PIG) | CHAR-017 integration test matrix (T-01–T-30); robots.txt RFC 9309 compliance; `CareNavigator/0.1` User-Agent |
 | 1.3 | v1.1 | `answer` field — factual extraction alongside result URLs (§6.2, §6.5, §7, §17); T-31–T-33 |
+| 1.4 | v1.0.0 (SOME PIG) | Audit-driven clarifications: `confidence_threshold` default 0.70 (§5.1); `www.`/non-`www.` auto-inclusion in `allowed_domains` (§5.1); available-links scope — not domain-filtered, enqueue-step filtering (§6.1, §10); plausibility retry behaviour — reinforced-hint retry and zero-link re-fetch (§9.3); fact-extraction provenance override (§9.4); answer content gate (§9.4); structural-zone extractor ordering and 200-link cap (§10); LocalAdapter default model `deepseek-r1:14b` (§6.3, §6.4); spec status updated to Production. |
 
 ---
 

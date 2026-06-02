@@ -1,5 +1,5 @@
 # Charlotte — Task Decomposition
-**Based on spec v1.3**
+**Based on spec v1.4** *(historical — all tasks complete as of v1.0.0)*
 
 Tasks are ordered by dependency. Items marked **parallel** can be worked simultaneously once their prerequisites are done. Each task references the spec section it implements. Each task includes writing its own unit tests — integration tests against the public API are written as a dedicated task once the engine exists.
 
