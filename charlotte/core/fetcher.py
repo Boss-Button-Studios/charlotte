@@ -27,7 +27,6 @@ from charlotte.exceptions import (
     CharlotteNetworkError,
     CharlotteRedirectError,
     CharlotteTimeoutError,
-    RobotsError,
 )
 
 if TYPE_CHECKING:
