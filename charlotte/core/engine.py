@@ -103,8 +103,10 @@ def crawl(
     Args:
         start_url:            Absolute URL at which to begin.
         goal:                 Natural language description of what to find.
-        model:                Adapter callable (AdapterProtocol). Raises
-                              CharlotteConfigError if None and no default is set.
+        model:                Adapter callable (AdapterProtocol). None resolves
+                              via CHARLOTTE_DEFAULT_ADAPTER (default: GroqAdapter).
+                              Raises CharlotteConfigError if the resolved adapter
+                              cannot be configured (e.g. missing GROQ_API_KEY).
         max_pages:            Hard ceiling on total pages fetched.
         max_depth:            Maximum link-hops from start_url.
         max_results:          Stop after this many confirmed results; None = collect all.

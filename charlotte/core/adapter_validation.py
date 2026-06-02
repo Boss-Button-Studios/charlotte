@@ -185,6 +185,11 @@ async def call_with_validation(
         goal, navigation_hint, page_title, page_url, page_summary,
         available_links, visit_history, results_so_far: Page context passed
             directly to the adapter unchanged.
+        schema_hint: Optional hint passed as ``schema_hint`` to the adapter
+            on the first call. Used by the engine's H3 plausibility retry
+            to inject a reinforced navigation reminder. If None (default),
+            the adapter receives ``schema_hint=None`` on the first attempt
+            and ``schema_hint=_SCHEMA_HINT`` on a schema-validation retry.
 
     Returns:
         Validated AdapterOutput ready for the engine to act on.
