@@ -192,8 +192,9 @@ def test_to_link_result_copies_all_fields():
 # ---------------------------------------------------------------------------
 
 def test_no_model_uses_default_adapter(monkeypatch):
+    # Force the Groq branch via env var, then remove the key to trigger the error.
+    monkeypatch.setenv("CHARLOTTE_DEFAULT_ADAPTER", "groq")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.delenv("CHARLOTTE_DEFAULT_ADAPTER", raising=False)
     with pytest.raises(CharlotteConfigError, match="Groq API key"):
         find_link(_START, _GOAL, model=None)
 

@@ -62,16 +62,16 @@ logger = logging.getLogger(__name__)
 def _resolve_default_adapter() -> "AdapterProtocol":
     """Instantiate the default adapter from CharlotteConfig (spec §5.1).
 
-    Consults CHARLOTTE_DEFAULT_ADAPTER ('groq' or 'local'). Falls back to
-    GroqAdapter. Each constructor raises CharlotteConfigError with a clear
-    message if its requirements (e.g. GROQ_API_KEY) are not met.
+    Consults CHARLOTTE_DEFAULT_ADAPTER ('local' or 'groq'). Falls back to
+    LocalAdapter. Each constructor raises CharlotteConfigError with a clear
+    message if its requirements are not met.
     """
     adapter_name = CharlotteConfig.default_adapter()
-    if adapter_name == "local":
-        from charlotte.adapters.local import LocalAdapter
-        return LocalAdapter()
-    from charlotte.adapters.groq import GroqAdapter
-    return GroqAdapter()
+    if adapter_name == "groq":
+        from charlotte.adapters.groq import GroqAdapter
+        return GroqAdapter()
+    from charlotte.adapters.local import LocalAdapter
+    return LocalAdapter()
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ def crawl(
         start_url:            Absolute URL at which to begin.
         goal:                 Natural language description of what to find.
         model:                Adapter callable (AdapterProtocol). None resolves
-                              via CHARLOTTE_DEFAULT_ADAPTER (default: GroqAdapter).
+                              via CHARLOTTE_DEFAULT_ADAPTER (default: LocalAdapter).
                               Raises CharlotteConfigError if the resolved adapter
                               cannot be configured (e.g. missing GROQ_API_KEY).
         max_pages:            Hard ceiling on total pages fetched.
