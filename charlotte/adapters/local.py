@@ -216,10 +216,22 @@ class LocalAdapter:
                 f"with a non-empty hostname, got: {resolved_base!r}"
             )
 
+        self._base_url = resolved_base
         self._endpoint = resolved_base + _COMPLETIONS_PATH
         self._model = model_name or os.environ.get("CHARLOTTE_LOCAL_MODEL", _DEFAULT_MODEL)
         self._timeout = timeout
         self._verbose = verbose
+
+    def __repr__(self) -> str:
+        return f"LocalAdapter(base_url={self._base_url!r}, model={self._model!r})"
+
+    def __getstate__(self) -> dict:
+        # LocalAdapter holds a reference to a live httpx transport. Pickling would
+        # capture ephemeral connection state. Raise here to prevent silent failures.
+        raise TypeError(
+            "LocalAdapter cannot be pickled — it holds a live HTTP client. "
+            "Reconstruct the adapter from its base_url and model_name at unpickle time instead."
+        )
 
     async def __call__(
         self,

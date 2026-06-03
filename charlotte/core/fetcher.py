@@ -21,12 +21,14 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from charlotte.config import HTTP_USER_AGENT
-from charlotte.core.normalizer import normalize_url
+from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.exceptions import (
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteRedirectError,
+    CharlotteResponseTooLargeError,
     CharlotteTimeoutError,
+    RobotsError,
 )
 
 if TYPE_CHECKING:
@@ -73,12 +75,15 @@ class PageFetcher:
     package must be installed or CharlotteConfigError is raised at init.
 
     Args:
-        allowed_domains:  Hostnames Charlotte is permitted to fetch.
-        connect_timeout:  Seconds to establish a TCP connection (spec §8.1).
-        read_timeout:     Seconds to receive the complete response body (spec §8.1).
-        render_js:        If True, use Playwright instead of httpx.
-        render_timeout:   Seconds to wait for JS to settle after navigation (spec §8.1).
-        polite_delay:     Seconds to sleep before each top-level fetch call.
+        allowed_domains:    Hostnames Charlotte is permitted to fetch.
+        connect_timeout:    Seconds to establish a TCP connection (spec §8.1).
+        read_timeout:       Seconds to receive the complete response body (spec §8.1).
+        render_js:          If True, use Playwright instead of httpx.
+        render_timeout:     Seconds to wait for JS to settle after navigation (spec §8.1).
+        polite_delay:       Seconds to sleep before each top-level fetch call.
+        max_response_bytes: Maximum response body size in bytes. Responses exceeding
+                            this limit raise CharlotteResponseTooLargeError.
+        user_agent:         HTTP User-Agent header value.
     """
 
     def __init__(
@@ -90,6 +95,8 @@ class PageFetcher:
         render_timeout: float = 15.0,
         polite_delay: float = 1.0,
         chromium_executable: str | None = None,
+        max_response_bytes: int = 10 * 1024 * 1024,
+        user_agent: str = HTTP_USER_AGENT,
     ) -> None:
         self._render_js = render_js
         self._render_timeout = render_timeout
@@ -104,6 +111,8 @@ class PageFetcher:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._polite_delay = polite_delay
+        self._max_response_bytes = max_response_bytes
+        self._user_agent = user_agent
 
     def _hostname(self, url: str) -> str:
         return (urlsplit(url).hostname or "").lower()
@@ -176,11 +185,74 @@ class PageFetcher:
         async with httpx.AsyncClient(
             follow_redirects=False,
             timeout=timeout,
-            headers={"User-Agent": HTTP_USER_AGENT},
+            headers={"User-Agent": self._user_agent},
         ) as client:
             while True:
+                # SSRF check before each request (also catches redirected URLs).
+                validate_url_safety(current_url)
                 try:
-                    response = await client.get(current_url)
+                    async with client.stream("GET", current_url) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location", "")
+                            destination = urljoin(current_url, location)
+                            redirect_chain.append((response.status_code, destination))
+
+                            if len(redirect_chain) > _MAX_REDIRECTS:
+                                raise CharlotteRedirectError(
+                                    f"Redirect chain for {url!r} exceeded {_MAX_REDIRECTS} hops"
+                                )
+                            if not self._is_allowed(destination):
+                                raise CharlotteRedirectError(
+                                    f"Redirect from {current_url!r} to {destination!r} "
+                                    f"crosses into disallowed domain {self._hostname(destination)!r}"
+                                )
+                            # Cross-domain robots check — spec §11.1: permissions do not
+                            # inherit across domain boundaries.
+                            if (
+                                robots_handler is not None
+                                and self._hostname(destination) != self._hostname(current_url)
+                            ):
+                                await robots_handler.check(destination, default_delay)
+
+                            try:
+                                norm_dest = normalize_url(destination)
+                            except CharlotteConfigError as exc:
+                                raise CharlotteRedirectError(
+                                    f"Redirect destination {destination!r} is not a valid URL: {exc}"
+                                ) from exc
+
+                            if destination in chain_seen or norm_dest in visited_urls:
+                                raise CharlotteRedirectError(
+                                    f"Redirect loop detected: {destination!r} already visited"
+                                )
+
+                            chain_seen.add(destination)
+                            current_url = destination
+                            continue  # back to while True — SSRF re-checked on redirect destination
+
+                        # Non-redirect: stream body with size cap.
+                        total = 0
+                        chunks: list[bytes] = []
+                        async for chunk in response.aiter_bytes():
+                            total += len(chunk)
+                            if total > self._max_response_bytes:
+                                raise CharlotteResponseTooLargeError(
+                                    f"Response from {current_url!r} exceeded "
+                                    f"{self._max_response_bytes // (1024 * 1024)} MB limit"
+                                )
+                            chunks.append(chunk)
+                        html = b"".join(chunks).decode(
+                            response.encoding or "utf-8", errors="replace"
+                        )
+                        return FetchResult(
+                            url=current_url,
+                            html=html,
+                            status_code=response.status_code,
+                            fetch_ms=int((time.monotonic() - start) * 1000),
+                            redirect_chain=redirect_chain,
+                        )
+                except (CharlotteResponseTooLargeError, CharlotteRedirectError, RobotsError):
+                    raise
                 except httpx.ConnectTimeout as exc:
                     raise CharlotteTimeoutError(
                         f"Connect timeout fetching {current_url!r}"
@@ -201,60 +273,6 @@ class PageFetcher:
                     raise CharlotteNetworkError(
                         f"Request failed for {current_url!r}: {exc}"
                     ) from exc
-
-                if not response.is_redirect:
-                    try:
-                        html = response.text
-                    except httpx.DecodingError as exc:
-                        raise CharlotteNetworkError(
-                            f"Failed to decode response from {current_url!r}: {exc}"
-                        ) from exc
-                    return FetchResult(
-                        url=current_url,
-                        html=html,
-                        status_code=response.status_code,
-                        fetch_ms=int((time.monotonic() - start) * 1000),
-                        redirect_chain=redirect_chain,
-                    )
-
-                location = response.headers.get("location", "")
-                destination = urljoin(current_url, location)
-
-                redirect_chain.append((response.status_code, destination))
-
-                if len(redirect_chain) > _MAX_REDIRECTS:
-                    raise CharlotteRedirectError(
-                        f"Redirect chain for {url!r} exceeded {_MAX_REDIRECTS} hops"
-                    )
-
-                if not self._is_allowed(destination):
-                    raise CharlotteRedirectError(
-                        f"Redirect from {current_url!r} to {destination!r} "
-                        f"crosses into disallowed domain {self._hostname(destination)!r}"
-                    )
-
-                # Cross-domain robots check — spec §11.1: permissions do not
-                # inherit across domain boundaries.
-                if (
-                    robots_handler is not None
-                    and self._hostname(destination) != self._hostname(current_url)
-                ):
-                    await robots_handler.check(destination, default_delay)
-
-                try:
-                    norm_dest = normalize_url(destination)
-                except CharlotteConfigError as exc:
-                    raise CharlotteRedirectError(
-                        f"Redirect destination {destination!r} is not a valid URL: {exc}"
-                    ) from exc
-
-                if destination in chain_seen or norm_dest in visited_urls:
-                    raise CharlotteRedirectError(
-                        f"Redirect loop detected: {destination!r} already visited"
-                    )
-
-                chain_seen.add(destination)
-                current_url = destination
 
     async def _fetch_with_playwright(
         self, url: str, *, visited_urls: set[str]
@@ -281,6 +299,11 @@ class PageFetcher:
                         timeout=self._render_timeout * 1000,
                     )
                     html = await page.content()
+                    if len(html.encode()) > self._max_response_bytes:
+                        raise CharlotteResponseTooLargeError(
+                            f"Rendered page from {url!r} exceeded "
+                            f"{self._max_response_bytes // (1024 * 1024)} MB limit"
+                        )
                     final_url = page.url
                     status_code = response.status if response is not None else 200
                 finally:
@@ -289,7 +312,12 @@ class PageFetcher:
             raise CharlotteTimeoutError(
                 f"Render timeout fetching {url!r}"
             ) from exc
-        except (CharlotteTimeoutError, CharlotteNetworkError, CharlotteRedirectError):
+        except (
+            CharlotteTimeoutError,
+            CharlotteNetworkError,
+            CharlotteRedirectError,
+            CharlotteResponseTooLargeError,
+        ):
             raise
         except Exception as exc:
             raise CharlotteNetworkError(

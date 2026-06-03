@@ -10,6 +10,7 @@ Public function: normalize_url(url, base_url=None) -> str
 
 from __future__ import annotations
 
+import ipaddress
 import posixpath
 import re
 from urllib.parse import (
@@ -21,7 +22,7 @@ from urllib.parse import (
     urlunsplit,
 )
 
-from charlotte.exceptions import CharlotteConfigError
+from charlotte.exceptions import CharlotteConfigError, CharlotteSSRFError
 
 # RFC 3986 §2.3 — characters that are never percent-encoded in a well-formed URL.
 # Decoding percent-encoded sequences for these characters produces a canonical form.
@@ -34,6 +35,17 @@ _UNRESERVED: frozenset[str] = frozenset(
 
 # Scheme → default port. Ports equal to these are stripped from the netloc.
 _DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443, "ftp": 21}
+
+# Cloud metadata endpoints that must never be reached, regardless of IP classification.
+# These hostnames resolve to link-local addresses but string-matching is faster and
+# catches cases where ipaddress() wouldn't apply (hostname rather than IP in the URL).
+_CLOUD_METADATA_HOSTS: frozenset[str] = frozenset({
+    "metadata.google.internal",
+    "metadata.azure.com",
+    "metadata.azure.internal",
+    "169.254.169.254",
+    "metadata.ec2.internal",
+})
 
 
 def _decode_unreserved(component: str) -> str:
@@ -83,6 +95,70 @@ def _sort_query(query: str) -> str:
     params = parse_qsl(query, keep_blank_values=True)
     params.sort(key=lambda kv: kv[0])
     return urlencode(params, quote_via=quote)
+
+
+def validate_url_safety(url: str) -> None:
+    """Reject URLs that could trigger SSRF against internal infrastructure.
+
+    Checks performed (all unconditional — there is no bypass):
+    - Scheme must be http or https (blocks file://, gopher://, etc.)
+    - Hostname must not be in the cloud metadata denylist
+    - Hostname must not resolve to a private, loopback, link-local, multicast,
+      or reserved IP address
+    - Bare "localhost" is rejected regardless of its OS resolution
+
+    DNS rebinding is a known partial gap: this check is purely static on the URL
+    string and does not re-validate after DNS resolution. See SECURITY.md.
+
+    Args:
+        url: Absolute URL to validate. Should be normalized first.
+
+    Raises:
+        CharlotteSSRFError: URL scheme is not http/https, or the hostname
+            resolves to a disallowed address range.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise CharlotteSSRFError(f"Could not parse URL for safety check: {url!r}") from exc
+
+    if parsed.scheme not in {"http", "https"}:
+        raise CharlotteSSRFError(
+            f"URL scheme {parsed.scheme!r} is not allowed — only http and https are permitted"
+        )
+
+    # Strip the FQDN trailing dot (e.g. "localhost." == "localhost") before any
+    # string-based checks so that forms like http://localhost./ are not bypassed.
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+
+    if hostname in _CLOUD_METADATA_HOSTS:
+        raise CharlotteSSRFError(
+            f"URL targets a cloud metadata endpoint that is never reachable: {hostname!r}"
+        )
+
+    if hostname == "localhost":
+        raise CharlotteSSRFError(
+            "URL targets 'localhost' — Charlotte only crawls publicly routable addresses"
+        )
+
+    # Try to parse as a bare IP address (works for both IPv4 and IPv6 literals).
+    # urlsplit().hostname strips brackets from IPv6 literals, giving a parseable address.
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        return  # hostname is a DNS name — static SSRF check passes (see DNS rebinding note)
+
+    if (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+    ):
+        raise CharlotteSSRFError(
+            f"URL targets a non-public IP address ({hostname!r}) — "
+            "Charlotte only crawls publicly routable addresses"
+        )
 
 
 def normalize_url(url: str, base_url: str | None = None) -> str:
@@ -150,13 +226,17 @@ def normalize_url(url: str, base_url: str | None = None) -> str:
     else:
         userinfo = ""
 
-    # Rule 2: strip default ports
+    # Rule 2: strip default ports.
+    # RFC 3986 §3.2.2: IPv6 literals must be enclosed in brackets in the netloc.
+    # urlsplit().hostname strips them; we restore them before reassembly.
+    host_part = f"[{hostname}]" if ":" in hostname else hostname
+
     if port and port == _DEFAULT_PORTS.get(scheme):
-        netloc = f"{userinfo}{hostname}"
+        netloc = f"{userinfo}{host_part}"
     elif port:
-        netloc = f"{userinfo}{hostname}:{port}"
+        netloc = f"{userinfo}{host_part}:{port}"
     else:
-        netloc = f"{userinfo}{hostname}"
+        netloc = f"{userinfo}{host_part}"
 
     # Rule 4: decode safe percent-encoding in the path
     path = _decode_unreserved(parsed.path)

@@ -11,6 +11,7 @@ Public function: validate_adapter_output, call_with_validation
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -19,6 +20,33 @@ from charlotte.exceptions import AdapterOutputError
 
 if TYPE_CHECKING:
     from charlotte.adapters.base import AdapterProtocol
+
+_MAX_REASONING_CHARS: int = 4096
+_MAX_ANSWER_CHARS: int = 1024
+_MAX_LINKS_TO_FOLLOW: int = 50
+_TRUNCATION_SUFFIX: str = " [truncated]"
+
+# Matches ANSI CSI escape sequences and non-printable control characters,
+# including tab (\x09). CR (\x0d) and LF (\x0a) are handled separately
+# (normalised to a single space rather than stripped outright).
+_CONTROL_CHAR_RE = re.compile(
+    r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]"   # control chars including tab, except CR/LF
+    r"|\x1b\[[0-9;]*[a-zA-Z]"              # ANSI CSI escape sequences
+)
+
+
+def _sanitize_text(text: str, max_chars: int) -> str:
+    """Strip control chars, normalize newlines to spaces, truncate at max_chars.
+
+    The returned string is guaranteed to be at most max_chars characters long,
+    including the ' [truncated]' suffix when truncation occurs.
+    """
+    text = _CONTROL_CHAR_RE.sub("", text)
+    text = re.sub(r"\r\n|\r|\n", " ", text)
+    if len(text) > max_chars:
+        text = text[:max_chars - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+    return text
+
 
 # Injected into the adapter prompt on retry when the first response fails
 # schema validation. Restates all field requirements explicitly. See §6.5.
@@ -126,7 +154,10 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
             f"'links_to_follow' must be a list, got {type(raw_links).__name__}"
         )
     # Invalid URL items are silently dropped; the response is not rejected.
+    # Cap at _MAX_LINKS_TO_FOLLOW after filtering — a model returning thousands of
+    # links is either confused or being manipulated; log volume would also be abusive.
     links_to_follow = [item for item in raw_links if _is_valid_url(item)]
+    links_to_follow = links_to_follow[:_MAX_LINKS_TO_FOLLOW]
 
     # --- reasoning ---
     if "reasoning" not in raw:
@@ -134,6 +165,9 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
     reasoning = raw["reasoning"]
     if not isinstance(reasoning, str):
         raise ValueError(f"'reasoning' must be a string, got {type(reasoning).__name__}")
+    # Sanitize before the non-empty check — control chars could produce whitespace-only
+    # strings that appear non-empty before sanitization.
+    reasoning = _sanitize_text(reasoning, _MAX_REASONING_CHARS)
     if not reasoning.strip():
         raise ValueError("'reasoning' must not be empty or whitespace-only")
 
@@ -144,6 +178,7 @@ def validate_adapter_output(raw: object) -> AdapterOutput:
             raise ValueError("'answer' must be null when 'found' is false")
         if not isinstance(answer, str):
             raise ValueError(f"'answer' must be a string, got {type(answer).__name__}")
+        answer = _sanitize_text(answer, _MAX_ANSWER_CHARS)
         if not answer.strip():
             raise ValueError("'answer' must not be empty or whitespace-only")
 

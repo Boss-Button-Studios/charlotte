@@ -60,6 +60,8 @@ def find_link(
     render_timeout: float = 15.0,
     default_delay: float = 1.0,
     chromium_executable: "str | None" = None,
+    max_response_bytes: int = 10 * 1024 * 1024,
+    user_agent: "str | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
@@ -95,6 +97,9 @@ def find_link(
                               render_js=True. Overrides Playwright's bundled
                               Chromium — needed on OS versions Playwright
                               doesn't yet package a bundled binary for.
+        max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
+        user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT env
+                              var, or the built-in default (charlotte-crawler/1.0).
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
@@ -120,6 +125,8 @@ def find_link(
         render_timeout=render_timeout,
         default_delay=default_delay,
         chromium_executable=chromium_executable,
+        max_response_bytes=max_response_bytes,
+        user_agent=user_agent,
     )
 
     resolved_stream = CharlotteConfig.stream() if stream is None else stream

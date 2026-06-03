@@ -14,10 +14,10 @@ Behaviour summary (§11.1):
   - Disallowed        → RobotsError (disallowed)
   - Allowed           → returns effective crawl delay
 
-User-agent matching: ``CareNavigator`` checked first, then ``*``. If neither
+User-agent matching: ``charlotte-crawler`` checked first, then ``*``. If neither
 section is present the domain is treated as fully crawlable.
 
-Crawl-delay: ``CareNavigator`` section checked first, then ``*``. The
+Crawl-delay: ``charlotte-crawler`` section checked first, then ``*``. The
 effective delay is whichever is larger: the robots.txt directive or the
 caller-supplied default.
 
@@ -36,7 +36,7 @@ import httpx
 from charlotte.config import HTTP_USER_AGENT
 from charlotte.exceptions import CharlotteInternalError, RobotsError
 
-_CHARLOTTE_UA: str = "CareNavigator"
+_CHARLOTTE_UA: str = "charlotte-crawler"
 _WILDCARD_UA: str = "*"
 _DEFAULT_CONNECT_TIMEOUT: float = 10.0
 _DEFAULT_READ_TIMEOUT: float = 10.0
@@ -67,9 +67,11 @@ class RobotsHandler:
         self,
         connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = _DEFAULT_READ_TIMEOUT,
+        user_agent: str = HTTP_USER_AGENT,
     ) -> None:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
+        self._user_agent = user_agent
         self._cache: dict[str, _CachedEntry] = {}
         self._cache_locks: dict[str, asyncio.Lock] = {}
 
@@ -138,7 +140,7 @@ class RobotsHandler:
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
-                headers={"User-Agent": HTTP_USER_AGENT},
+                headers={"User-Agent": self._user_agent},
                 follow_redirects=True,
             ) as client:
                 response = await client.get(robots_url)

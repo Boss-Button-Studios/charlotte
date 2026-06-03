@@ -152,10 +152,10 @@ async def test_connection_error_raises_robots_error():
 # ---------------------------------------------------------------------------
 
 @respx.mock
-async def test_care_navigator_section_disallows():
-    """CareNavigator-specific Disallow blocks the crawl."""
+async def test_charlotte_crawler_section_disallows():
+    """charlotte-crawler-specific Disallow blocks the crawl."""
     content = (
-        "User-agent: CareNavigator\n"
+        "User-agent: charlotte-crawler\n"
         "Disallow: /\n"
         "\n"
         "User-agent: *\n"
@@ -167,10 +167,10 @@ async def test_care_navigator_section_disallows():
 
 
 @respx.mock
-async def test_care_navigator_section_allows_when_wildcard_disallows():
-    """CareNavigator Allow takes precedence over a wildcard Disallow."""
+async def test_charlotte_crawler_section_allows_when_wildcard_disallows():
+    """charlotte-crawler Allow takes precedence over a wildcard Disallow."""
     content = (
-        "User-agent: CareNavigator\n"
+        "User-agent: charlotte-crawler\n"
         "Allow: /\n"
         "\n"
         "User-agent: *\n"
@@ -183,7 +183,7 @@ async def test_care_navigator_section_allows_when_wildcard_disallows():
 
 @respx.mock
 async def test_wildcard_disallows_when_no_care_navigator_section():
-    """When there is no CareNavigator section, * rules apply."""
+    """When there is no charlotte-crawler section, * rules apply."""
     content = "User-agent: *\nDisallow: /"
     respx.get(_ROBOTS).mock(return_value=_robots_response(content))
     with pytest.raises(RobotsError):
@@ -192,7 +192,7 @@ async def test_wildcard_disallows_when_no_care_navigator_section():
 
 @respx.mock
 async def test_wildcard_allows_when_no_care_navigator_section():
-    """No CareNavigator section and * allows → crawl proceeds."""
+    """No charlotte-crawler section and * allows → crawl proceeds."""
     content = "User-agent: *\nDisallow: /other"
     respx.get(_ROBOTS).mock(return_value=_robots_response(content))
     delay = await _handler().check(_PAGE, _DEFAULT_DELAY)
@@ -201,7 +201,7 @@ async def test_wildcard_allows_when_no_care_navigator_section():
 
 @respx.mock
 async def test_no_matching_section_treats_as_allowed():
-    """Neither CareNavigator nor * present → fully crawlable."""
+    """Neither charlotte-crawler nor * present → fully crawlable."""
     content = "User-agent: Googlebot\nDisallow: /"
     respx.get(_ROBOTS).mock(return_value=_robots_response(content))
     delay = await _handler().check(_PAGE, _DEFAULT_DELAY)
@@ -248,10 +248,10 @@ async def test_default_delay_larger_than_crawl_delay_is_returned():
 
 
 @respx.mock
-async def test_care_navigator_crawl_delay_preferred_over_wildcard():
-    """CareNavigator crawl-delay takes priority over * crawl-delay."""
+async def test_charlotte_crawler_crawl_delay_preferred_over_wildcard():
+    """charlotte-crawler crawl-delay takes priority over * crawl-delay."""
     content = (
-        "User-agent: CareNavigator\n"
+        "User-agent: charlotte-crawler\n"
         "Crawl-delay: 3\n"
         "\n"
         "User-agent: *\n"
@@ -266,7 +266,7 @@ async def test_care_navigator_crawl_delay_preferred_over_wildcard():
 async def test_wildcard_crawl_delay_used_when_no_care_navigator_delay():
     """Falls back to * crawl-delay when CareNavigator has none."""
     content = (
-        "User-agent: CareNavigator\n"
+        "User-agent: charlotte-crawler\n"
         "Allow: /\n"
         "\n"
         "User-agent: *\n"

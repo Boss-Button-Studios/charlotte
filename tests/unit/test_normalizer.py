@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from charlotte.core.normalizer import _normalize_path, normalize_url
-from charlotte.exceptions import CharlotteConfigError
+from charlotte.core.normalizer import _normalize_path, normalize_url, validate_url_safety
+from charlotte.exceptions import CharlotteConfigError, CharlotteSSRFError
 
 
 # ---------------------------------------------------------------------------
@@ -328,3 +328,104 @@ def test_urlunsplit_value_error_raises_config_error():
     with patch("charlotte.core.normalizer.urlunsplit", side_effect=ValueError("bad")):
         with pytest.raises(CharlotteConfigError, match="Could not reassemble"):
             normalize_url("http://example.com/")
+
+
+# ---------------------------------------------------------------------------
+# IPv6 netloc reassembly — RFC 3986 §3.2.2 bracket restoration
+# ---------------------------------------------------------------------------
+
+def test_ipv6_loopback_brackets_preserved():
+    """IPv6 literals must be enclosed in brackets in the normalized URL."""
+    result = normalize_url("http://[::1]/admin")
+    assert result == "http://[::1]/admin"
+
+
+def test_ipv6_with_port_brackets_preserved():
+    result = normalize_url("http://[2001:db8::1]:8080/path")
+    assert result == "http://[2001:db8::1]:8080/path"
+
+
+def test_ipv6_normalize_is_idempotent():
+    """normalize_url(normalize_url(x)) == normalize_url(x) for IPv6 addresses."""
+    for url in [
+        "http://[::1]/admin",
+        "http://[2001:db8::1]:8080/path",
+        "http://[fe80::1]/",
+    ]:
+        once = normalize_url(url)
+        twice = normalize_url(once)
+        assert once == twice, f"Not idempotent: {url!r} → {once!r} → {twice!r}"
+
+
+# ---------------------------------------------------------------------------
+# SSRF protection — validate_url_safety()
+# ---------------------------------------------------------------------------
+
+def test_ssrf_non_http_scheme_rejected():
+    """file://, gopher://, and other non-http schemes are rejected."""
+    with pytest.raises(CharlotteSSRFError, match="scheme"):
+        validate_url_safety("file:///etc/passwd")
+
+    with pytest.raises(CharlotteSSRFError, match="scheme"):
+        validate_url_safety("gopher://example.com/")
+
+    with pytest.raises(CharlotteSSRFError, match="scheme"):
+        validate_url_safety("ftp://example.com/files")
+
+
+def test_ssrf_loopback_ipv4_rejected():
+    with pytest.raises(CharlotteSSRFError):
+        validate_url_safety("http://127.0.0.1/")
+
+    with pytest.raises(CharlotteSSRFError):
+        validate_url_safety("http://127.0.0.2/")
+
+
+def test_ssrf_private_ipv4_rejected():
+    for addr in ("10.0.0.1", "192.168.1.1", "172.16.0.1"):
+        with pytest.raises(CharlotteSSRFError, match="non-public"):
+            validate_url_safety(f"http://{addr}/")
+
+
+def test_ssrf_loopback_ipv6_rejected():
+    with pytest.raises(CharlotteSSRFError):
+        validate_url_safety("http://[::1]/")
+
+
+def test_ssrf_link_local_rejected():
+    # 169.254.0.0/16 is link-local and in the denylist by hostname AND by IP.
+    with pytest.raises(CharlotteSSRFError):
+        validate_url_safety("http://169.254.169.254/latest/meta-data/")
+
+
+def test_ssrf_cloud_metadata_hostname_rejected():
+    with pytest.raises(CharlotteSSRFError, match="metadata"):
+        validate_url_safety("http://metadata.google.internal/computeMetadata/v1/")
+
+    with pytest.raises(CharlotteSSRFError, match="metadata"):
+        validate_url_safety("http://metadata.azure.com/metadata/instance")
+
+
+def test_ssrf_localhost_rejected():
+    with pytest.raises(CharlotteSSRFError, match="localhost"):
+        validate_url_safety("http://localhost/")
+
+    with pytest.raises(CharlotteSSRFError, match="localhost"):
+        validate_url_safety("http://localhost:8080/api")
+
+
+def test_ssrf_fqdn_trailing_dot_rejected():
+    # "localhost." is the FQDN form of "localhost" — must not bypass the denylist.
+    with pytest.raises(CharlotteSSRFError, match="localhost"):
+        validate_url_safety("http://localhost./")
+
+    # Cloud metadata via FQDN form must also be rejected.
+    with pytest.raises(CharlotteSSRFError, match="metadata"):
+        validate_url_safety("http://metadata.google.internal./computeMetadata/v1/")
+
+
+def test_ssrf_public_url_passes():
+    """Normal public URLs pass without raising."""
+    validate_url_safety("http://example.com/")
+    validate_url_safety("https://www.gov.uk/services")
+    validate_url_safety("http://8.8.8.8/")  # Google's public DNS — is_private=False

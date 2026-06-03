@@ -10,6 +10,7 @@ GroqAdapter error handling.
 from __future__ import annotations
 
 import json
+import pickle
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -753,3 +754,64 @@ def test_groq_prompt_contains_spec_preamble():
         schema_hint=None,
     )
     assert _SPEC_PREAMBLE in prompt
+
+
+# ---------------------------------------------------------------------------
+# S-M2 — GroqAdapter repr and pickle protection
+# ---------------------------------------------------------------------------
+
+def test_groq_adapter_repr_excludes_client(monkeypatch):
+    """repr(adapter) must not expose the underlying HTTP client or API key."""
+    monkeypatch.setenv("GROQ_API_KEY", "sk-secret-key")
+    adapter = GroqAdapter()
+    r = repr(adapter)
+    assert "_client" not in r
+    assert "sk-secret-key" not in r
+    assert "GroqAdapter" in r
+
+
+def test_groq_adapter_pickle_raises(monkeypatch):
+    """GroqAdapter must refuse to be pickled to prevent accidental key serialization."""
+    monkeypatch.setenv("GROQ_API_KEY", "sk-secret-key")
+    adapter = GroqAdapter()
+    with pytest.raises(TypeError, match="pickled"):
+        pickle.dumps(adapter)
+
+
+# ---------------------------------------------------------------------------
+# S-H2 — adapter_validation output sanitization
+# ---------------------------------------------------------------------------
+
+def test_validate_reasoning_control_chars_stripped():
+    """Control characters in reasoning are stripped before the field is returned."""
+    raw = {**_VALID_NOT_FOUND, "reasoning": "ok\x00\x07\x1b[31mred\x1b[0m"}
+    result = validate_adapter_output(raw)
+    assert "\x00" not in result.reasoning
+    assert "\x07" not in result.reasoning
+    assert "\x1b" not in result.reasoning
+
+
+def test_validate_reasoning_newlines_normalized():
+    """Newlines in reasoning are converted to spaces."""
+    raw = {**_VALID_NOT_FOUND, "reasoning": "line one\nline two\r\nline three"}
+    result = validate_adapter_output(raw)
+    assert "\n" not in result.reasoning
+    assert "\r" not in result.reasoning
+
+
+def test_validate_reasoning_truncated_at_max():
+    """Reasoning longer than 4096 chars is truncated; total length stays at max."""
+    from charlotte.core.adapter_validation import _MAX_REASONING_CHARS
+    raw = {**_VALID_NOT_FOUND, "reasoning": "x" * (_MAX_REASONING_CHARS + 500)}
+    result = validate_adapter_output(raw)
+    assert "[truncated]" in result.reasoning
+    assert len(result.reasoning) == _MAX_REASONING_CHARS
+
+
+def test_validate_links_to_follow_capped():
+    """links_to_follow is capped at 50 items after URL validation."""
+    from charlotte.core.adapter_validation import _MAX_LINKS_TO_FOLLOW
+    links = [f"http://example.com/{i}" for i in range(_MAX_LINKS_TO_FOLLOW + 20)]
+    raw = {**_VALID_NOT_FOUND, "links_to_follow": links}
+    result = validate_adapter_output(raw)
+    assert len(result.links_to_follow) == _MAX_LINKS_TO_FOLLOW

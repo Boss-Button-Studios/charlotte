@@ -22,7 +22,7 @@ from charlotte.config import CharlotteConfig
 from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
-from charlotte.core.normalizer import normalize_url
+from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
 from charlotte.core.provenance import check_provenance
 from charlotte.core.robots import RobotsHandler
@@ -32,6 +32,7 @@ from charlotte.exceptions import (
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteRedirectError,
+    CharlotteSSRFError,
     CharlotteTimeoutError,
     RobotsError,
 )
@@ -97,6 +98,8 @@ def crawl(
     render_timeout: float = 15.0,
     default_delay: float = 1.0,
     chromium_executable: "str | None" = None,
+    max_response_bytes: int = 10 * 1024 * 1024,
+    user_agent: "str | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Navigate toward *goal* starting from *start_url*.
 
@@ -126,6 +129,10 @@ def crawl(
         chromium_executable:  Path to a Chromium/Chrome binary. Use when Playwright's
                               bundled Chromium doesn't support the current OS (e.g.
                               Ubuntu 26.04). Ignored when render_js=False.
+        max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
+                              Larger responses are skipped as PageSkipped events.
+        user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT env
+                              var, or the built-in default (charlotte-crawler/1.0).
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
@@ -133,7 +140,8 @@ def crawl(
 
     Raises:
         CharlotteConfigError: Invalid configuration (playwright not installed,
-                              invalid start_url, or no model provided).
+                              invalid start_url, no model, or start_url targets a
+                              private/reserved address).
     """
     # Resolve env-var defaults for sentinel parameters (spec §6.3).
     if stream is None:
@@ -155,6 +163,16 @@ def crawl(
         normalized_start = normalize_url(start_url)
     except CharlotteConfigError as exc:
         raise CharlotteConfigError(f"Invalid start_url: {exc}") from exc
+
+    # SSRF check — raise before the generator starts so callers see an immediate
+    # CharlotteSSRFError (a CharlotteConfigError) rather than a skipped page.
+    # The fetcher also checks on every request, catching redirected addresses.
+    try:
+        validate_url_safety(normalized_start)
+    except CharlotteSSRFError:
+        raise
+
+    resolved_user_agent = user_agent if user_agent is not None else CharlotteConfig.user_agent()
 
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     _domains: frozenset[str]
@@ -188,6 +206,8 @@ def crawl(
         render_timeout=render_timeout,
         default_delay=default_delay,
         chromium_executable=chromium_executable,
+        max_response_bytes=max_response_bytes,
+        user_agent=resolved_user_agent,
     )
 
     if stream:
@@ -225,6 +245,8 @@ async def _crawl_core(
     render_timeout: float,
     default_delay: float,
     chromium_executable: "str | None",
+    max_response_bytes: int,
+    user_agent: str,
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
 
@@ -236,7 +258,10 @@ async def _crawl_core(
         max_results=max_results,
     )
 
-    robots: RobotsHandler | None = RobotsHandler(connect_timeout=connect_timeout) if respect_robots else None
+    robots: RobotsHandler | None = (
+        RobotsHandler(connect_timeout=connect_timeout, user_agent=user_agent)
+        if respect_robots else None
+    )
     polite_delay = default_delay
 
     if robots is not None:
@@ -260,6 +285,8 @@ async def _crawl_core(
         render_timeout=render_timeout,
         polite_delay=polite_delay,
         chromium_executable=chromium_executable,
+        max_response_bytes=max_response_bytes,
+        user_agent=user_agent,
     )
 
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])

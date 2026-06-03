@@ -244,6 +244,7 @@ The `LocalAdapter` is a fully supported production path. Self-hosted inference �
 | `CHARLOTTE_LOCAL_MODEL` | `"deepseek-r1:14b"` | Model name for the `LocalAdapter` |
 | `CHARLOTTE_STREAM` | `"true"` | `"true"` or `"false"` — sets streaming default |
 | `CHARLOTTE_RESPECT_ROBOTS` | `"true"` | `"true"` or `"false"` — sets robots.txt default |
+| `CHARLOTTE_USER_AGENT` | `"charlotte-crawler/1.0 (…)"` | Overrides the HTTP User-Agent header |
 | `GROQ_API_KEY` | *(required for GroqAdapter)* | Groq API key |
 
 A parameter passed directly to `crawl()` or `find_link()` always takes precedence over the corresponding environment variable.
@@ -512,7 +513,9 @@ The `respect_robots=False` opt-out places responsibility on the caller, where it
 
 **robots.txt contradictory across redirects:** If a redirect crosses domains, each domain's `robots.txt` is checked independently. A redirect from a permitted domain to a restricted domain is not followed. Charlotte does not inherit permissions across domain boundaries.
 
-**User-agent matching:** Charlotte checks `robots.txt` against the `CareNavigator` user-agent first, then against `*`. If neither is present, the domain is treated as fully crawlable.
+**HTTP User-Agent:** Charlotte identifies itself as `charlotte-crawler/1.0 (+https://github.com/Boss-Button-Studios/charlotte)` in all outbound HTTP requests (page fetches and `robots.txt` checks). This value can be overridden per-crawl via the `user_agent=` parameter or globally via the `CHARLOTTE_USER_AGENT` environment variable. The per-call parameter takes precedence over the environment variable.
+
+**User-agent matching:** Charlotte checks `robots.txt` against the `charlotte-crawler` user-agent first, then against `*`. If neither is present, the domain is treated as fully crawlable. Site operators who had `User-agent: CareNavigator` directives should update them to `User-agent: charlotte-crawler` as of v1.5.
 
 **Crawl-delay directive:** If `robots.txt` specifies a `Crawl-delay` directive for Charlotte's user-agent or `*`, Charlotte respects it. The crawl-delay value overrides Charlotte's default polite request delay for that domain, using whichever is larger.
 
@@ -590,6 +593,8 @@ Charlotte segregates data by trust level at every stage. Data does not move from
 | **Promoted to trusted** | Model output that has passed the provenance check and plausibility check |
 
 The `<page_content>` wrapper in Section 9.2 is the mechanism for marking untrusted data before it enters the model. The provenance check in Section 9.4 is the mechanism for promoting semi-trusted model output to trusted result data. These two boundaries are the most important integrity controls in the system.
+
+**Model output sanitization.** Semi-trusted model output is sanitized before any field reaches caller-visible structures (`CrawlResult`, `visit_log`, streaming events). Charlotte strips ANSI escape sequences and non-printable control characters from `reasoning` and `answer`, normalizes embedded newlines to spaces, and enforces size caps: `reasoning` is truncated at 4 096 characters (with a `[truncated]` suffix); `answer` at 1 024 characters. `links_to_follow` is capped at 50 items after URL validation. This limits the blast radius of a compromised or adversarial model endpoint pushing oversized or terminal-manipulating content into caller logs.
 
 ---
 
@@ -786,8 +791,12 @@ Charlotte raises only named exceptions — never bare `Exception` or third-party
 ```
 CharlotteError
 ├── CharlotteConfigError       — invalid configuration at call time
-│                                (e.g. Playwright not installed, invalid URL)
+│   │                            (e.g. Playwright not installed, invalid URL)
+│   └── CharlotteSSRFError     — start_url or redirect target is a private, loopback,
+│                                link-local, or reserved address (added in v1.5)
 ├── CharlotteNetworkError      — network-level failure fetching a page
+│   └── CharlotteResponseTooLargeError — response body exceeded max_response_bytes
+│                                        (added in v1.5)
 ├── CharlotteTimeoutError      — any of the four timeout thresholds exceeded
 ├── CharlotteRedirectError     — redirect limit exceeded or cross-domain redirect blocked
 ├── RobotsError                — robots.txt disallowed, unreachable, or malformed
@@ -862,6 +871,7 @@ Tests T-06 through T-33 use mocked HTTP, model responses, and filesystem — no 
 | 1.2 | v1.0 (SOME PIG) | CHAR-017 integration test matrix (T-01–T-30); robots.txt RFC 9309 compliance; `CareNavigator/0.1` User-Agent |
 | 1.3 | v1.1 | `answer` field — factual extraction alongside result URLs (§6.2, §6.5, §7, §17); T-31–T-33 |
 | 1.4 | v1.0.0 (SOME PIG) | Audit-driven clarifications: `confidence_threshold` default 0.70 (§5.1); `www.`/non-`www.` auto-inclusion in `allowed_domains` (§5.1); available-links scope — not domain-filtered, enqueue-step filtering (§6.1, §10); plausibility retry behaviour — reinforced-hint retry and zero-link re-fetch (§9.3); fact-extraction provenance override (§9.4); answer content gate (§9.4); structural-zone extractor ordering and 200-link cap (§10); LocalAdapter default model `deepseek-r1:14b` (§6.3, §6.4); spec status updated to Production. |
+| 1.5 | v1.1 | Security audit fixes: SSRF protection (`validate_url_safety()`, `CharlotteSSRFError`) (§8); response size cap (`max_response_bytes`, `CharlotteResponseTooLargeError`); User-Agent updated to `charlotte-crawler/1.0`, `CHARLOTTE_USER_AGENT` env var, `user_agent=` param (§11); robots.txt matching key changed from `CareNavigator` to `charlotte-crawler` (§11.1); model output sanitization — control chars, ANSI sequences, size caps, links cap (§13.3); adapter introspection protection (`__repr__`, `__getstate__`); dependency upper bounds; `SECURITY.md`. |
 
 ---
 

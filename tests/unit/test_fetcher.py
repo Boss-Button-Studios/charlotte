@@ -16,6 +16,7 @@ from charlotte.exceptions import (
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteRedirectError,
+    CharlotteResponseTooLargeError,
     CharlotteTimeoutError,
     RobotsError,
 )
@@ -416,16 +417,11 @@ async def test_protocol_error_raises_network_error():
 
 
 @respx.mock
-async def test_decoding_error_on_response_text_raises_network_error():
-    # DecodingError raised when reading response.text (e.g. broken content-encoding)
-    # is wrapped as CharlotteNetworkError, not propagated raw.
-    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(200, content=b"ok"))
-    with patch.object(
-        httpx.Response, "text", new_callable=PropertyMock,
-        side_effect=httpx.DecodingError("corrupt encoding"),
-    ):
-        with pytest.raises(CharlotteNetworkError, match="decode"):
-            await _fetcher().fetch(f"{_BASE}/", visited_urls=set())
+async def test_response_too_large_raises():
+    # Responses whose body exceeds max_response_bytes raise CharlotteResponseTooLargeError.
+    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(200, content=b"x" * 200))
+    with pytest.raises(CharlotteResponseTooLargeError):
+        await _fetcher(max_response_bytes=100).fetch(f"{_BASE}/", visited_urls=set())
 
 
 @respx.mock

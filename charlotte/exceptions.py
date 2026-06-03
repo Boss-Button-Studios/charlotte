@@ -71,6 +71,21 @@ class AdapterOutputError(CharlotteError):
     """
 
 
+class CharlotteSSRFError(CharlotteConfigError):
+    """URL targets a private, loopback, link-local, or reserved address.
+
+    Raised immediately before any network request is made. The caller must
+    supply a publicly routable URL. See spec §8.
+    """
+
+
+class CharlotteResponseTooLargeError(CharlotteNetworkError):
+    """Response body exceeded the configured max_response_bytes limit.
+
+    Handled internally: the affected page is skipped and the crawl continues.
+    """
+
+
 class CharlotteInternalError(CharlotteError):
     """Unexpected internal state that Charlotte could not recover from.
 
