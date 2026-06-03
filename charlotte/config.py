@@ -12,7 +12,10 @@ import os
 # Sent as the User-Agent header in every outbound HTTP request made by Charlotte
 # (page fetches and robots.txt checks). One value shared across both HTTP clients
 # so spec §11 user-agent matching and server-side logs stay consistent.
-HTTP_USER_AGENT: str = "CareNavigator/0.1"
+# Override per-crawl via user_agent= or globally via CHARLOTTE_USER_AGENT.
+HTTP_USER_AGENT: str = (
+    "charlotte-crawler/1.0 (+https://github.com/Boss-Button-Studios/charlotte)"
+)
 
 
 def _bool_env(key: str, default: bool) -> bool:
@@ -75,3 +78,8 @@ class CharlotteConfig:
     def groq_api_key() -> str | None:
         """Groq API key from GROQ_API_KEY. Returns None if not set or empty."""
         return os.environ.get("GROQ_API_KEY") or None
+
+    @staticmethod
+    def user_agent() -> str:
+        """HTTP User-Agent string. CHARLOTTE_USER_AGENT overrides the built-in default."""
+        return os.environ.get("CHARLOTTE_USER_AGENT", "").strip() or HTTP_USER_AGENT

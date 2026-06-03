@@ -9,6 +9,7 @@ timeout, HTTP errors, connection failures, and malformed responses.
 from __future__ import annotations
 
 import json
+import pickle
 
 import httpx
 import pytest
@@ -510,3 +511,23 @@ def test_local_prompt_contains_spec_preamble():
         schema_hint=None,
     )
     assert _SPEC_PREAMBLE in prompt
+
+
+# ---------------------------------------------------------------------------
+# S-M2 — LocalAdapter repr and pickle protection
+# ---------------------------------------------------------------------------
+
+def test_local_adapter_repr_excludes_client():
+    """repr(adapter) must not expose the underlying httpx client."""
+    adapter = LocalAdapter(base_url="http://localhost:11434", model_name="llama3")
+    r = repr(adapter)
+    assert "_client" not in r
+    assert "LocalAdapter" in r
+    assert "localhost:11434" in r
+
+
+def test_local_adapter_pickle_raises():
+    """LocalAdapter must refuse to be pickled to prevent client state serialization."""
+    adapter = LocalAdapter(base_url="http://localhost:11434")
+    with pytest.raises(TypeError, match="pickled"):
+        pickle.dumps(adapter)

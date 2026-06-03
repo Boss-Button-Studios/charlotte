@@ -17,6 +17,8 @@ from charlotte.exceptions import (
     CharlotteInternalError,
     CharlotteNetworkError,
     CharlotteRedirectError,
+    CharlotteResponseTooLargeError,
+    CharlotteSSRFError,
     CharlotteTimeoutError,
     RobotsError,
 )
@@ -60,6 +62,8 @@ __all__ = [
     "CharlotteNetworkError",
     "CharlotteTimeoutError",
     "CharlotteRedirectError",
+    "CharlotteSSRFError",
+    "CharlotteResponseTooLargeError",
     "RobotsError",
     "AdapterOutputError",
     "CharlotteInternalError",

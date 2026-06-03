@@ -153,6 +153,17 @@ class GroqAdapter:
         self._client = AsyncGroq(api_key=resolved_key, max_retries=1)
         self._model = model
 
+    def __repr__(self) -> str:
+        return f"GroqAdapter(model={self._model!r})"
+
+    def __getstate__(self) -> dict:
+        # GroqAdapter holds live credentials in _client. Pickling would serialize
+        # the API key into the pickle stream. Raise here to prevent accidental leakage.
+        raise TypeError(
+            "GroqAdapter cannot be pickled — it holds live API credentials. "
+            "Reconstruct the adapter from environment variables at unpickle time instead."
+        )
+
     async def __call__(
         self,
         *,

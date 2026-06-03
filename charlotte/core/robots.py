@@ -14,10 +14,10 @@ Behaviour summary (§11.1):
   - Disallowed        → RobotsError (disallowed)
   - Allowed           → returns effective crawl delay
 
-User-agent matching: ``CareNavigator`` checked first, then ``*``. If neither
+User-agent matching: ``charlotte-crawler`` checked first, then ``*``. If neither
 section is present the domain is treated as fully crawlable.
 
-Crawl-delay: ``CareNavigator`` section checked first, then ``*``. The
+Crawl-delay: ``charlotte-crawler`` section checked first, then ``*``. The
 effective delay is whichever is larger: the robots.txt directive or the
 caller-supplied default.
 
@@ -36,7 +36,7 @@ import httpx
 from charlotte.config import HTTP_USER_AGENT
 from charlotte.exceptions import CharlotteInternalError, RobotsError
 
-_CHARLOTTE_UA: str = "CareNavigator"
+_CHARLOTTE_UA: str = "charlotte-crawler"
 _WILDCARD_UA: str = "*"
 _DEFAULT_CONNECT_TIMEOUT: float = 10.0
 _DEFAULT_READ_TIMEOUT: float = 10.0
