@@ -67,9 +67,11 @@ class RobotsHandler:
         self,
         connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = _DEFAULT_READ_TIMEOUT,
+        user_agent: str = HTTP_USER_AGENT,
     ) -> None:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
+        self._user_agent = user_agent
         self._cache: dict[str, _CachedEntry] = {}
         self._cache_locks: dict[str, asyncio.Lock] = {}
 
@@ -138,7 +140,7 @@ class RobotsHandler:
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
-                headers={"User-Agent": HTTP_USER_AGENT},
+                headers={"User-Agent": self._user_agent},
                 follow_redirects=True,
             ) as client:
                 response = await client.get(robots_url)

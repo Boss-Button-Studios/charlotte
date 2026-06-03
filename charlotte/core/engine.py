@@ -258,7 +258,10 @@ async def _crawl_core(
         max_results=max_results,
     )
 
-    robots: RobotsHandler | None = RobotsHandler(connect_timeout=connect_timeout) if respect_robots else None
+    robots: RobotsHandler | None = (
+        RobotsHandler(connect_timeout=connect_timeout, user_agent=user_agent)
+        if respect_robots else None
+    )
     polite_delay = default_delay
 
     if robots is not None:

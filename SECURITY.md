@@ -28,46 +28,82 @@ The following are in scope:
 - The model output sanitization layer (`adapter_validation.py`)
 - Dependency vulnerabilities (we run `pip-audit` in CI)
 
-## Known Limitations
+## Known Limitations and Deferred Findings
 
-### DNS Rebinding (partial mitigation)
+The following findings were identified in the v1.0 security audit and deferred to a
+future release. They do not block current use but should be addressed before Charlotte
+is deployed in high-assurance environments.
 
-`validate_url_safety()` performs static SSRF checks on the URL string before any DNS
-resolution occurs. A DNS rebinding attack — where a hostname resolves to a public IP
-at validation time and a private IP at request time — is not detected by this check.
-Operators who deploy Charlotte in environments where DNS rebinding is a realistic threat
-should apply network-level mitigations (e.g. DNS response filtering, egress firewall
-rules).
+---
 
-### Caller-Controlled Parameters
+### S-M3 — No wall-clock crawl budget *(Medium, deferred)*
 
-Charlotte is a library. Its `start_url`, `goal`, `allowed_domains`, and other parameters
-are trusted inputs — Charlotte assumes they come from the operator, not from end users.
-If your application allows untrusted users to supply these values, you must validate and
-sanitize them before passing them to Charlotte. Key footguns:
+Charlotte enforces a page budget (`max_pages`) and per-request timeouts
+(`connect_timeout`, `read_timeout`, `render_timeout`) but not a total elapsed time.
+A target site that responds at exactly `read_timeout - 1` seconds per request can pin
+a worker for `max_pages × read_timeout` ≈ 10 minutes on defaults. A slow model
+endpoint compounds this. The plausibility retry path can double the time budget for a
+single page.
 
-- `start_url` with a data URI or JavaScript URL is blocked by the SSRF check, but
-  unusual schemes that Charlotte doesn't recognize will also be blocked.
-- `goal` containing adversarial text could influence model reasoning; use
-  `navigation_hint` to provide operator-level constraints that appear outside the
-  untrusted content boundary.
-- `allowed_domains` should always be set explicitly when the caller's input influences
-  which site is crawled.
+**Workaround:** Wrap `crawl()` in `asyncio.wait_for()` if you need a hard wall-clock
+limit. A `total_timeout` parameter is planned for a future release.
 
-### Wall-Clock Crawl Budget
+---
 
-Charlotte enforces a page budget (`max_pages`) and depth budget (`max_depth`) but does
-not enforce a wall-clock timeout on the entire crawl. A `total_timeout` parameter is
-planned for a future release. Until then, callers should wrap `crawl()` in
-`asyncio.wait_for()` if they need a hard time limit.
+### S-M4 — No defense-in-depth when caller parameters are attacker-influenced *(Medium, deferred)*
 
-### Unbalanced `<think>` Tags (Low Risk)
+Charlotte is a library. Every safety boundary is controlled by a parameter to
+`crawl()`/`find_link()`. If an attacker can influence these values, they can disable
+safety controls:
 
-Charlotte's `<think>`/`</think>` stripping in model output uses a regex that requires a
-matching open tag. A model endpoint that emits only a closing tag without an opening one
-will have its reasoning prefix stripped, but malformed tag sequences are not currently
-tested exhaustively. This is low risk because it requires a compromised or misconfigured
-model endpoint.
+- `respect_robots=False` disables robots.txt enforcement
+- `allowed_domains=['169.254.169.254']` — the SSRF check blocks this specific address,
+  but an attacker supplying `allowed_domains` that Charlotte's SSRF check doesn't
+  recognise could succeed
+- `confidence_threshold=0.0` accepts any model output
+- `max_pages=100000` removes the budget
+- `default_delay=0` removes polite delay
+
+**Recommendation:** Validate and sanitize all caller-supplied parameters before passing
+them to Charlotte when those values originate from untrusted user input. In particular:
+
+- Always set `allowed_domains` explicitly; do not allow callers to supply arbitrary domains
+- Apply your own `max_pages`/`max_depth` ceiling before calling Charlotte
+- Do not expose `respect_robots`, `confidence_threshold`, or delay parameters to end users
+
+---
+
+### S-L1 — `<think>` tag stripping regex is not validated for balanced/nested tags *(Low, deferred)*
+
+Both adapters use `_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)` to strip reasoning-model thoughts before JSON parsing. The non-greedy match handles the common case but does not validate that tags are balanced or non-nested. A model output of the form `<think>outer <think>inner</think> outer continued` will strip the inner pair and leave `outer  outer continued` in the content stream.
+
+**Risk:** Low. Requires a compromised model endpoint, which is already game-over for other reasons. Planned fix: add a test asserting nested/unbalanced `<think>` tags produce sensible output, or replace the regex with an explicit state machine.
+
+---
+
+### S-L2 — Sanitizer recursion depth not guarded *(Low, deferred)*
+
+BeautifulSoup's `find_all(True)` walk in `strip_hidden()` may recurse deeply on adversarially nested HTML. Empirical testing with 5 000-deep nesting completes in ≈0.07 s without hitting Python's default recursion limit, but the limit is not explicitly asserted or enforced.
+
+**Risk:** Low on realistic pages. Planned fix: add a test asserting 10 000-deep nesting does not blow up, or add a depth guard via `SoupStrainer`.
+
+---
+
+### DNS Rebinding *(partial mitigation)*
+
+`validate_url_safety()` performs static checks on the URL string before DNS resolution.
+A DNS rebinding attack — hostname resolves to a public IP at validation time, then a
+private IP at request time — is not detected. Operators in environments where DNS
+rebinding is a realistic threat should apply network-level mitigations (e.g. DNS
+response filtering, egress firewall rules).
+
+---
+
+### Adapter Client Introspection *(fixed in v1.1)*
+
+Previously, `GroqAdapter._client` (a `groq.AsyncGroq` object holding the API key) was
+accessible via `vars()`, `__dict__`, or a debugger. Fixed: `__repr__` now excludes
+`_client`, and `__getstate__` raises `TypeError` on pickle.
 
 ## Security Architecture Notes
 
