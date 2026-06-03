@@ -276,7 +276,7 @@ Charlotte fetches and obeys `robots.txt` before visiting any page, unless `respe
 - **`Disallow` rule matched** → `RobotsError`; affected page skipped; other pages continue
 - **`Crawl-delay` directive** → honoured; whichever is larger between the directive and `default_delay` is used
 - **Cross-domain redirect** → each domain's `robots.txt` is checked independently; permissions never inherit across domain boundaries
-- **User-agent matching** — `CareNavigator` first, then `*`
+- **User-agent matching** — `charlotte-crawler` first, then `*`
 
 ---
 
