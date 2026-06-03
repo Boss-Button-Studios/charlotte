@@ -414,6 +414,16 @@ def test_ssrf_localhost_rejected():
         validate_url_safety("http://localhost:8080/api")
 
 
+def test_ssrf_fqdn_trailing_dot_rejected():
+    # "localhost." is the FQDN form of "localhost" — must not bypass the denylist.
+    with pytest.raises(CharlotteSSRFError, match="localhost"):
+        validate_url_safety("http://localhost./")
+
+    # Cloud metadata via FQDN form must also be rejected.
+    with pytest.raises(CharlotteSSRFError, match="metadata"):
+        validate_url_safety("http://metadata.google.internal./computeMetadata/v1/")
+
+
 def test_ssrf_public_url_passes():
     """Normal public URLs pass without raising."""
     validate_url_safety("http://example.com/")

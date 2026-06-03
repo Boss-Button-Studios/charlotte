@@ -515,7 +515,7 @@ The `respect_robots=False` opt-out places responsibility on the caller, where it
 
 **HTTP User-Agent:** Charlotte identifies itself as `charlotte-crawler/1.0 (+https://github.com/Boss-Button-Studios/charlotte)` in all outbound HTTP requests (page fetches and `robots.txt` checks). This value can be overridden per-crawl via the `user_agent=` parameter or globally via the `CHARLOTTE_USER_AGENT` environment variable. The per-call parameter takes precedence over the environment variable.
 
-**User-agent matching:** Charlotte checks `robots.txt` against the `charlotte-crawler` user-agent first, then against `*`. If neither is present, the domain is treated as fully crawlable. Site operators who had `User-agent: CareNavigator` directives should update them to `User-agent: charlotte-crawler` as of v1.1.
+**User-agent matching:** Charlotte checks `robots.txt` against the `charlotte-crawler` user-agent first, then against `*`. If neither is present, the domain is treated as fully crawlable. Site operators who had `User-agent: CareNavigator` directives should update them to `User-agent: charlotte-crawler` as of v1.5.
 
 **Crawl-delay directive:** If `robots.txt` specifies a `Crawl-delay` directive for Charlotte's user-agent or `*`, Charlotte respects it. The crawl-delay value overrides Charlotte's default polite request delay for that domain, using whichever is larger.
 
@@ -791,8 +791,12 @@ Charlotte raises only named exceptions — never bare `Exception` or third-party
 ```
 CharlotteError
 ├── CharlotteConfigError       — invalid configuration at call time
-│                                (e.g. Playwright not installed, invalid URL)
+│   │                            (e.g. Playwright not installed, invalid URL)
+│   └── CharlotteSSRFError     — start_url or redirect target is a private, loopback,
+│                                link-local, or reserved address (added in v1.5)
 ├── CharlotteNetworkError      — network-level failure fetching a page
+│   └── CharlotteResponseTooLargeError — response body exceeded max_response_bytes
+│                                        (added in v1.5)
 ├── CharlotteTimeoutError      — any of the four timeout thresholds exceeded
 ├── CharlotteRedirectError     — redirect limit exceeded or cross-domain redirect blocked
 ├── RobotsError                — robots.txt disallowed, unreachable, or malformed

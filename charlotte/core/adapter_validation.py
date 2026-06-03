@@ -24,21 +24,27 @@ if TYPE_CHECKING:
 _MAX_REASONING_CHARS: int = 4096
 _MAX_ANSWER_CHARS: int = 1024
 _MAX_LINKS_TO_FOLLOW: int = 50
+_TRUNCATION_SUFFIX: str = " [truncated]"
 
-# Matches ANSI CSI escape sequences and non-printable control characters.
-# Tabs (\x09) and newlines (\x0a, \x0d) are handled separately (newlines → space).
+# Matches ANSI CSI escape sequences and non-printable control characters,
+# including tab (\x09). CR (\x0d) and LF (\x0a) are handled separately
+# (normalised to a single space rather than stripped outright).
 _CONTROL_CHAR_RE = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"   # control chars except tab/CR/LF
+    r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]"   # control chars including tab, except CR/LF
     r"|\x1b\[[0-9;]*[a-zA-Z]"              # ANSI CSI escape sequences
 )
 
 
 def _sanitize_text(text: str, max_chars: int) -> str:
-    """Strip control chars, normalize newlines to spaces, truncate at max_chars."""
+    """Strip control chars, normalize newlines to spaces, truncate at max_chars.
+
+    The returned string is guaranteed to be at most max_chars characters long,
+    including the ' [truncated]' suffix when truncation occurs.
+    """
     text = _CONTROL_CHAR_RE.sub("", text)
     text = re.sub(r"\r\n|\r|\n", " ", text)
     if len(text) > max_chars:
-        text = text[:max_chars] + " [truncated]"
+        text = text[:max_chars - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
     return text
 
 

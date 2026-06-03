@@ -800,12 +800,12 @@ def test_validate_reasoning_newlines_normalized():
 
 
 def test_validate_reasoning_truncated_at_max():
-    """Reasoning longer than 4096 chars is truncated with a [truncated] suffix."""
+    """Reasoning longer than 4096 chars is truncated; total length stays at max."""
     from charlotte.core.adapter_validation import _MAX_REASONING_CHARS
     raw = {**_VALID_NOT_FOUND, "reasoning": "x" * (_MAX_REASONING_CHARS + 500)}
     result = validate_adapter_output(raw)
     assert "[truncated]" in result.reasoning
-    assert len(result.reasoning) <= _MAX_REASONING_CHARS + len(" [truncated]")
+    assert len(result.reasoning) == _MAX_REASONING_CHARS
 
 
 def test_validate_links_to_follow_capped():

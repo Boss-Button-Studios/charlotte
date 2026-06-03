@@ -127,7 +127,9 @@ def validate_url_safety(url: str) -> None:
             f"URL scheme {parsed.scheme!r} is not allowed — only http and https are permitted"
         )
 
-    hostname = (parsed.hostname or "").lower()
+    # Strip the FQDN trailing dot (e.g. "localhost." == "localhost") before any
+    # string-based checks so that forms like http://localhost./ are not bypassed.
+    hostname = (parsed.hostname or "").lower().rstrip(".")
 
     if hostname in _CLOUD_METADATA_HOSTS:
         raise CharlotteSSRFError(
