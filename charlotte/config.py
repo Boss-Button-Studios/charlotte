@@ -43,15 +43,15 @@ class CharlotteConfig:
 
     @staticmethod
     def default_adapter() -> str:
-        """Return 'groq' or 'local'. Selects the shipped default adapter.
+        """Return 'local' or 'groq'. Selects the shipped default adapter.
 
         Invalid values (anything other than 'groq' or 'local') fall back to
-        'groq' rather than raising — a misconfigured env var should not crash
+        'local' rather than raising — a misconfigured env var should not crash
         a caller that intended to rely on the default.
         """
-        val = os.environ.get("CHARLOTTE_DEFAULT_ADAPTER", "groq").strip().lower()
+        val = os.environ.get("CHARLOTTE_DEFAULT_ADAPTER", "local").strip().lower()
         if val not in ("groq", "local"):
-            return "groq"
+            return "local"
         return val
 
     @staticmethod

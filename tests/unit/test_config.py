@@ -9,7 +9,7 @@ from charlotte.config import CharlotteConfig
 
 def test_default_adapter_default(monkeypatch):
     monkeypatch.delenv("CHARLOTTE_DEFAULT_ADAPTER", raising=False)
-    assert CharlotteConfig.default_adapter() == "groq"
+    assert CharlotteConfig.default_adapter() == "local"
 
 
 def test_default_adapter_groq(monkeypatch):
@@ -27,10 +27,10 @@ def test_default_adapter_case_insensitive(monkeypatch):
     assert CharlotteConfig.default_adapter() == "local"
 
 
-def test_default_adapter_invalid_falls_back_to_groq(monkeypatch):
+def test_default_adapter_invalid_falls_back_to_local(monkeypatch):
     # A typo should not crash a caller — it silently uses the safe default.
     monkeypatch.setenv("CHARLOTTE_DEFAULT_ADAPTER", "openai")
-    assert CharlotteConfig.default_adapter() == "groq"
+    assert CharlotteConfig.default_adapter() == "local"
 
 
 # ---------------------------------------------------------------------------

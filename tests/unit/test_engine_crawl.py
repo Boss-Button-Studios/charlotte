@@ -138,10 +138,11 @@ async def _collect_events(gen) -> list:
 # ---------------------------------------------------------------------------
 
 def test_no_model_uses_default_adapter(monkeypatch):
-    # model=None resolves via CharlotteConfig; GroqAdapter raises CharlotteConfigError
-    # when GROQ_API_KEY is absent — confirming the resolution path runs correctly.
+    # model=None resolves via CharlotteConfig; default is LocalAdapter, which
+    # constructs without an API key. Setting CHARLOTTE_DEFAULT_ADAPTER='groq' and
+    # removing GROQ_API_KEY confirms the resolution path runs for the Groq branch.
+    monkeypatch.setenv("CHARLOTTE_DEFAULT_ADAPTER", "groq")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.delenv("CHARLOTTE_DEFAULT_ADAPTER", raising=False)
     with pytest.raises(CharlotteConfigError, match="Groq API key"):
         crawl(_START, _GOAL, model=None)
 

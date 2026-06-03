@@ -119,8 +119,8 @@ Examples:
 
 #### Optional Parameters
 
-**`model`** *(callable, default: built-in Groq/Llama 3 8B adapter)*
-A callable that implements the Navigator Model Interface (see Section 6). If not provided, Charlotte uses the adapter specified by `CHARLOTTE_DEFAULT_ADAPTER`, or `GroqAdapter` if the environment variable is not set. This is the BYOM hook.
+**`model`** *(callable, default: built-in LocalAdapter)*
+A callable that implements the Navigator Model Interface (see Section 6). If not provided, Charlotte uses the adapter specified by `CHARLOTTE_DEFAULT_ADAPTER`, or `LocalAdapter` if the environment variable is not set. This is the BYOM hook.
 
 **`max_pages`** *(int, default: 20)*
 Maximum number of pages Charlotte will fetch and evaluate across the entire crawl. The primary cost and safety control. Charlotte stops and returns her best result when this limit is reached.
@@ -239,7 +239,7 @@ The `LocalAdapter` is a fully supported production path. Self-hosted inference �
 
 | Variable | Default | Effect |
 |---|---|---|
-| `CHARLOTTE_DEFAULT_ADAPTER` | `"groq"` | `"groq"` or `"local"` — selects the shipped default adapter |
+| `CHARLOTTE_DEFAULT_ADAPTER` | `"local"` | `"local"` or `"groq"` — selects the shipped default adapter |
 | `CHARLOTTE_LOCAL_BASE_URL` | `"http://localhost:11434"` | Base URL for the `LocalAdapter` |
 | `CHARLOTTE_LOCAL_MODEL` | `"deepseek-r1:14b"` | Model name for the `LocalAdapter` |
 | `CHARLOTTE_STREAM` | `"true"` | `"true"` or `"false"` — sets streaming default |

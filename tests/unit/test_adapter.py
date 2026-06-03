@@ -405,6 +405,14 @@ def test_default_model(monkeypatch):
     assert adapter._model == "llama-3.1-8b-instant"
 
 
+def test_prompt_size_params_stored(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(max_page_chars=4000, max_prompt_links=25, max_completion_tokens=500)
+    assert adapter._max_page_chars == 4000
+    assert adapter._max_prompt_links == 25
+    assert adapter._max_completion_tokens == 500
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — successful API call
 # ---------------------------------------------------------------------------
@@ -431,10 +439,46 @@ async def test_groq_adapter_passes_model_to_api(groq_adapter):
     assert call_kwargs["model"] == "llama-3.1-8b-instant"
 
 
+async def test_groq_adapter_passes_max_tokens_to_api(groq_adapter):
+    await groq_adapter(**_PAGE_CONTEXT)
+    call_kwargs = groq_adapter._client.chat.completions.create.call_args[1]
+    assert call_kwargs["max_tokens"] == 700
+
+
 async def test_groq_adapter_uses_json_object_mode(groq_adapter):
     await groq_adapter(**_PAGE_CONTEXT)
     call_kwargs = groq_adapter._client.chat.completions.create.call_args[1]
     assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+async def test_groq_adapter_truncates_page_summary(monkeypatch):
+    """max_page_chars trims page_summary before building the prompt."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(max_page_chars=10)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(json.dumps(_VALID_NOT_FOUND))
+    )
+    ctx = dict(_PAGE_CONTEXT, page_summary="A" * 1000)
+    await adapter(**ctx)
+    user_msg = adapter._client.chat.completions.create.call_args[1]["messages"][1]["content"]
+    assert "A" * 11 not in user_msg  # only first 10 A's should appear
+
+
+async def test_groq_adapter_truncates_available_links(monkeypatch):
+    """max_prompt_links trims available_links before building the prompt."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(max_prompt_links=2)
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(json.dumps(_VALID_NOT_FOUND))
+    )
+    many_links = [{"text": f"link{i}", "url": f"http://example.com/{i}"} for i in range(10)]
+    ctx = dict(_PAGE_CONTEXT, available_links=many_links)
+    await adapter(**ctx)
+    user_msg = adapter._client.chat.completions.create.call_args[1]["messages"][1]["content"]
+    assert "link2" not in user_msg  # only first 2 links
+    assert "link0" in user_msg
 
 
 async def test_groq_adapter_sends_system_and_user_messages(groq_adapter):

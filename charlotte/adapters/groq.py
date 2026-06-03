@@ -119,19 +119,38 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
+_DEFAULT_MAX_PAGE_CHARS: int = 7_000
+_DEFAULT_MAX_PROMPT_LINKS: int = 50
+# Navigation JSON responses are small; 700 output tokens is generous.
+# Groq's free tier bills input+output against a 6 000 TPM per-request budget;
+# keeping this explicit prevents the SDK from allocating ~1 200 extra tokens
+# by default, which pushes large-page requests over the limit.
+_DEFAULT_MAX_COMPLETION_TOKENS: int = 700
+
+
 class GroqAdapter:
     """Navigator model adapter for the Groq API.
 
     Uses Llama 3.1 8B Instruct by default — fast, cheap, and reliable for
-    structured navigation decisions. On API error, the groq SDK retries once
-    with backoff (max_retries=1). If both attempts fail, AdapterOutputError
-    is raised. See spec §6.3.
+    structured navigation decisions. On API error, the groq SDK retries with
+    backoff (max_retries=3). If all attempts fail, AdapterOutputError is
+    raised. See spec §6.3.
+
+    ``max_page_chars`` and ``max_prompt_links`` trim the page content and link
+    list before serialising the prompt. Groq's free tier allows 6 000 tokens
+    per minute (sliding window) shared across all requests; the defaults keep
+    each prompt under ~3 500 tokens. Back-to-back model calls on a multi-page
+    crawl will exhaust this budget and trigger 429 rate limits — up to 3 retries
+    are attempted before raising. Upgrade to a Dev-tier key for higher limits.
     """
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str = _DEFAULT_MODEL,
+        max_page_chars: int = _DEFAULT_MAX_PAGE_CHARS,
+        max_prompt_links: int = _DEFAULT_MAX_PROMPT_LINKS,
+        max_completion_tokens: int = _DEFAULT_MAX_COMPLETION_TOKENS,
     ) -> None:
         try:
             from groq import AsyncGroq
@@ -149,12 +168,23 @@ class GroqAdapter:
                 "api_key= to GroqAdapter()."
             )
 
-        # max_retries=1: one retry with exponential backoff on transient API errors.
-        self._client = AsyncGroq(api_key=resolved_key, max_retries=1)
+        # max_retries=3: up to 3 retries with respect for retry-after headers.
+        # Groq's free tier has a 6 000 TPM sliding window; back-to-back model calls
+        # deplete it quickly, causing 429s. Three retries lets the window reset
+        # (~60 s) without raising to the caller.
+        self._client = AsyncGroq(api_key=resolved_key, max_retries=3)
         self._model = model
+        self._max_page_chars = max_page_chars
+        self._max_prompt_links = max_prompt_links
+        self._max_completion_tokens = max_completion_tokens
 
     def __repr__(self) -> str:
-        return f"GroqAdapter(model={self._model!r})"
+        return (
+            f"GroqAdapter(model={self._model!r}, "
+            f"max_page_chars={self._max_page_chars}, "
+            f"max_prompt_links={self._max_prompt_links}, "
+            f"max_completion_tokens={self._max_completion_tokens})"
+        )
 
     def __getstate__(self) -> dict:
         # GroqAdapter holds live credentials in _client. Pickling would serialize
@@ -182,8 +212,8 @@ class GroqAdapter:
             navigation_hint=navigation_hint,
             page_title=page_title,
             page_url=page_url,
-            page_summary=page_summary,
-            available_links=available_links,
+            page_summary=page_summary[: self._max_page_chars],
+            available_links=available_links[: self._max_prompt_links],
             visit_history=visit_history,
             results_so_far=results_so_far,
             schema_hint=schema_hint,
@@ -196,6 +226,7 @@ class GroqAdapter:
                     {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
+                max_tokens=self._max_completion_tokens,
             )
             raw_content = response.choices[0].message.content or ""
             content = _THINK_TAG_RE.sub("", raw_content)
