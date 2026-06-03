@@ -132,9 +132,9 @@ class GroqAdapter:
     """Navigator model adapter for the Groq API.
 
     Uses Llama 3.1 8B Instruct by default — fast, cheap, and reliable for
-    structured navigation decisions. On API error, the groq SDK retries once
-    with backoff (max_retries=1). If both attempts fail, AdapterOutputError
-    is raised. See spec §6.3.
+    structured navigation decisions. On API error, the groq SDK retries with
+    backoff (max_retries=3). If all attempts fail, AdapterOutputError is
+    raised. See spec §6.3.
 
     ``max_page_chars`` and ``max_prompt_links`` trim the page content and link
     list before serialising the prompt. Groq's free tier allows 6 000 tokens

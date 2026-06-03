@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -44,9 +45,30 @@ from charlotte.models import (
     ResultFound,
 )
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean(value: str | None) -> str | None:
+    """Strip control characters from untrusted text before printing or logging."""
+    if value is None:
+        return None
+    return _CONTROL_CHARS_RE.sub(" ", value).strip()
+
+
+def _read_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer (got {raw!r})") from None
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1 (got {value})")
+    return value
+
+
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
-MAX_PAGES = int(os.environ.get("CHARLOTTE_MAX_PAGES", "8"))
-MAX_DEPTH = int(os.environ.get("CHARLOTTE_MAX_DEPTH", "3"))
+MAX_PAGES = _read_positive_int("CHARLOTTE_MAX_PAGES", 8)
+MAX_DEPTH = _read_positive_int("CHARLOTTE_MAX_DEPTH", 3)
 
 LOGS_DIR = Path("crawl_logs")
 
@@ -132,11 +154,12 @@ async def run_case(
                 })
 
             elif isinstance(event, ModelDecision):
+                reasoning = _clean(event.reasoning) or ""
                 print(
                     f"  [model]  found={event.found}  conf={event.confidence:.2f}  "
                     f"{event.links_queued}/{len(event.links_suggested)} queued  [{elapsed_ms}ms]"
                 )
-                print(f"           {textwrap.shorten(event.reasoning, width=100)}")
+                print(f"           {textwrap.shorten(reasoning, width=100)}")
                 log["events"].append({
                     "type": "ModelDecision",
                     "elapsed_ms": elapsed_ms,
@@ -145,30 +168,32 @@ async def run_case(
                     "confidence": event.confidence,
                     "links_queued": event.links_queued,
                     "links_suggested": event.links_suggested,
-                    "reasoning": event.reasoning,
+                    "reasoning": reasoning,
                 })
 
             elif isinstance(event, ResultFound):
-                answers_collected.append(event.answer)
+                answer = _clean(event.answer)
+                answers_collected.append(answer)
                 print(f"  [result] conf={event.confidence:.2f}  {event.url}")
-                if event.answer:
-                    print(f"           answer: {textwrap.shorten(event.answer, width=100)}")
+                if answer:
+                    print(f"           answer: {textwrap.shorten(answer, width=100)}")
                 log["events"].append({
                     "type": "ResultFound",
                     "elapsed_ms": elapsed_ms,
                     "url": event.url,
                     "confidence": event.confidence,
                     "result_index": event.result_index,
-                    "answer": event.answer,
+                    "answer": answer,
                 })
 
             elif isinstance(event, PageSkipped):
-                print(f"  [skip]   {event.url}  — {textwrap.shorten(event.reason, width=70)}")
+                reason = _clean(event.reason) or ""
+                print(f"  [skip]   {event.url}  — {textwrap.shorten(reason, width=70)}")
                 log["events"].append({
                     "type": "PageSkipped",
                     "elapsed_ms": elapsed_ms,
                     "url": event.url,
-                    "reason": event.reason,
+                    "reason": reason,
                     "error_type": event.error_type,
                 })
 
@@ -209,7 +234,8 @@ async def run_case(
                 }
 
     except Exception as exc:
-        outcome = f"error: {type(exc).__name__}: {exc}"
+        safe_exc = _clean(str(exc)) or ""
+        outcome = f"error: {type(exc).__name__}: {safe_exc}"
         print(f"  [ERROR]  {outcome}")
         log["result"] = {"outcome": outcome}
 
