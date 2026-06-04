@@ -4,6 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
+| 1.1.x   | Yes       |
 | 1.0.x   | Yes       |
 
 ## Reporting a Vulnerability
@@ -99,11 +100,17 @@ response filtering, egress firewall rules).
 
 ---
 
-### Adapter Client Introspection *(fixed in v1.1)*
+### Adapter Client Introspection *(fixed in v1.1.0)*
 
 Previously, `GroqAdapter._client` (a `groq.AsyncGroq` object holding the API key) was
 accessible via `vars()`, `__dict__`, or a debugger. Fixed: `__repr__` now excludes
 `_client`, and `__getstate__` raises `TypeError` on pickle.
+
+The API key remains accessible via deliberate attribute traversal of the
+underscore-prefixed client (e.g. `adapter._client.api_key`). This is the standard Python
+convention for private state; defending against it is not feasible without rejecting
+Python's introspection model entirely. The defenses above cover the realistic accident
+paths (logging, serialization, debugger summaries).
 
 ## Security Architecture Notes
 
