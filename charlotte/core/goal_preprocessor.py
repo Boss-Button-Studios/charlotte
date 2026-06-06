@@ -104,7 +104,6 @@ class DeterministicPreprocessor:
         locale: str,
     ) -> GoalContext:
         goal_norm = normalize_text(goal)
-        hint_norm = normalize_text(navigation_hint or "")
 
         # Anchor terms: tokens from goal and hint, stop-words removed.
         raw_tokens = tokenize(goal) + (tokenize(navigation_hint) if navigation_hint else [])
