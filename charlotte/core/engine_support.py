@@ -7,8 +7,13 @@ These are private to the engine layer — not public API.
 from __future__ import annotations
 
 from time import monotonic
+from typing import TYPE_CHECKING
 
+from charlotte.exceptions import CharlotteInternalError
 from charlotte.models import CrawlResult
+
+if TYPE_CHECKING:
+    from charlotte.models import GoalContext
 
 
 def _resolve_default_adapter():
@@ -43,3 +48,14 @@ def _empty_result(*, budget_exhausted: bool) -> CrawlResult:
 
 def _elapsed_ms(start: float) -> int:
     return int((monotonic() - start) * 1000)
+
+
+def _rank_links(ranker, goal_context: "GoalContext", links: list) -> list:
+    """Call ranker, re-raising any exception as CharlotteInternalError."""
+    try:
+        return ranker(goal_context, links)
+    except Exception as exc:
+        raise CharlotteInternalError(
+            f"Link ranker raised an unexpected error: {exc}. "
+            "Please report this at https://github.com/Boss-Button-Studios/charlotte/issues"
+        ) from exc

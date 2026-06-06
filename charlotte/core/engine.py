@@ -16,10 +16,10 @@ from urllib.parse import urlsplit
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.adapter_validation import call_with_validation
-from charlotte.core.engine_support import _elapsed_ms, _empty_result, _resolve_default_adapter
+from charlotte.core.engine_support import _elapsed_ms, _empty_result, _rank_links, _resolve_default_adapter
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
-from charlotte.core.goal_preprocessor import DeterministicPreprocessor, InMemoryGoalContextCache
+from charlotte.core.goal_preprocessor import DeterministicPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
@@ -162,7 +162,7 @@ def crawl(
 
     _preprocessor = preprocessor or DeterministicPreprocessor()
     _ranker = ranker or BM25LinkRanker()
-    goal_context = InMemoryGoalContextCache().get_or_create(goal, navigation_hint, locale, _preprocessor)
+    goal_context = _preprocessor(goal, navigation_hint, locale)
 
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     _domains: frozenset[str]
@@ -354,7 +354,7 @@ async def _crawl_core(
         # Rank links by BM25 relevance to the goal before the model call so
         # the model receives candidates in best-first order. score_map is also
         # used at enqueue time to populate the priority queue.
-        _rl = ranker(goal_context, extracted.links)
+        _rl = _rank_links(ranker, goal_context, extracted.links)
         _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
         ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
         score_map = {normalize_url(u): s for u, s in _rl}
@@ -405,7 +405,7 @@ async def _crawl_core(
                     )
                     clean = strip_hidden(page.html)
                     extracted = extract(clean, page_url=page.url)
-                    _rl = ranker(goal_context, extracted.links)
+                    _rl = _rank_links(ranker, goal_context, extracted.links)
                     _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
                     ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
                     score_map = {normalize_url(u): s for u, s in _rl}
