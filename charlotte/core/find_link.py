@@ -62,6 +62,9 @@ def find_link(
     chromium_executable: "str | None" = None,
     max_response_bytes: int = 10 * 1024 * 1024,
     user_agent: "str | None" = None,
+    preprocessor: "Any | None" = None,
+    ranker: "Any | None" = None,
+    locale: str = "en_US",
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
@@ -127,6 +130,9 @@ def find_link(
         chromium_executable=chromium_executable,
         max_response_bytes=max_response_bytes,
         user_agent=user_agent,
+        preprocessor=preprocessor,
+        ranker=ranker,
+        locale=locale,
     )
 
     resolved_stream = CharlotteConfig.stream() if stream is None else stream

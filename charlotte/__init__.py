@@ -27,6 +27,7 @@ from charlotte.models import (
     CrawlComplete,
     CrawlResult,
     CrawlStarted,
+    GoalContext,
     LinkResult,
     ModelDecision,
     PageFetched,
@@ -43,6 +44,7 @@ __all__ = [
     "find_link",
     # Result types
     "CrawlResult",
+    "GoalContext",
     "LinkResult",
     "VisitLogEntry",
     # Streaming events
