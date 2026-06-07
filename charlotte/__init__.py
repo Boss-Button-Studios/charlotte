@@ -30,6 +30,7 @@ from charlotte.models import (
     GoalContext,
     LinkResult,
     ModelDecision,
+    ModelEvaluating,
     PageFetched,
     PageSkipped,
     ResultFound,
@@ -50,6 +51,7 @@ __all__ = [
     # Streaming events
     "CrawlStarted",
     "PageFetched",
+    "ModelEvaluating",
     "ModelDecision",
     "ResultFound",
     "PageSkipped",
