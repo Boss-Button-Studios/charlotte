@@ -159,21 +159,45 @@ _GOAL_TYPES: frozenset[str] = frozenset({
 })
 
 _HYBRID_SYSTEM = """\
-You are a goal-context analyzer for a web crawler. Given a navigation or \
-information-extraction goal, return JSON context to guide the crawl.
+You are a web-crawl goal analyzer. For each goal, produce JSON that helps a \
+web crawler find the right page faster.
+
+Your primary job is to expand the goal with SYNONYMS and NEGATIVE TERMS. \
+This is the main value you add beyond simple keyword matching — do not leave \
+synonyms empty for any meaningful goal.
 
 JSON fields:
-  "goal_type"            — one of: navigation, phone_extraction, date_extraction, \
-address_extraction, price_extraction, document_link, freeform_fact
-  "goal_type_confidence" — float 0.0-1.0
-  "synonyms"             — object mapping key terms (verbatim in goal text) to \
-lists of alternative phrasings; keys MUST appear in the goal
-  "anchor_terms"         — array of key tokens or short phrases from the goal
-  "negative_terms"       — array of terms indicating the wrong page; MUST NOT \
-appear in the goal and MUST NOT overlap synonyms or anchor_terms
-  "regex_hints"          — array of valid Python regex patterns for extracting the \
-answer (fact goals only); empty for navigation goals
-  "description"          — one-sentence interpretation of the goal"""
+  "goal_type"            — one of: navigation, phone_extraction, date_extraction,
+                           address_extraction, price_extraction, document_link,
+                           freeform_fact
+  "goal_type_confidence" — float 0.0–1.0
+  "synonyms"             — object mapping each key term (verbatim in goal) to a
+                           list of alternative phrasings a website might use.
+                           Keys MUST appear in the goal. Do NOT leave this empty.
+  "anchor_terms"         — the most discriminating tokens from the goal (skip
+                           generic words like "find", "the", "page")
+  "negative_terms"       — terms that indicate the WRONG page. MUST NOT appear
+                           in the goal and MUST NOT overlap synonyms or anchor_terms.
+  "regex_hints"          — valid Python regex patterns (fact goals only); [] for
+                           navigation goals
+  "description"          — one plain-English sentence describing what to find
+
+Example input:  "Find the contact page"
+Example output:
+{
+  "goal_type": "navigation",
+  "goal_type_confidence": 0.95,
+  "synonyms": {
+    "contact": ["contact us", "get in touch", "reach us", "contact information",
+                "email us", "connect with us"]
+  },
+  "anchor_terms": ["contact"],
+  "negative_terms": ["home", "about", "careers", "sitemap", "login", "news"],
+  "regex_hints": [],
+  "description": "Find the page where visitors can contact the organization."
+}
+
+Respond with JSON only — no explanation text, no code fences, no markdown."""
 
 
 def _extract_json(content: str) -> dict:
