@@ -317,6 +317,22 @@ def test_hybrid_falls_back_on_oversized_context():
 
 
 @respx.mock
+def test_hybrid_falls_back_on_malformed_completion_structure():
+    # Empty choices array → IndexError inside content extraction → fallback.
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=httpx.Response(200, json={"choices": []}))
+    ctx = HybridPreprocessor()("Find the contact page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_falls_back_on_missing_choices_key():
+    # No choices key at all → KeyError inside content extraction → fallback.
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=httpx.Response(200, json={"result": "unexpected"}))
+    ctx = HybridPreprocessor()("Find the contact page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
 def test_hybrid_anchor_terms_fallback_to_tokenized_goal():
     # All model anchor_terms invalid → code falls back to deterministic tokens;
     # source stays "model" because validation did not hard-reject.

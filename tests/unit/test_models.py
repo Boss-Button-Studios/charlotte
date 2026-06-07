@@ -493,9 +493,20 @@ def test_destination_verification_failed_type():
 
 
 def test_phase_c_events_type_not_in_init():
-    """type field must be auto-set for all Phase C events."""
+    """type field must be auto-set for all Phase C events — not accepted via __init__."""
+    vr = VerificationResult(url="http://x.com", passed=False, mode="off", score=None, reason="r")
+    c = Candidate(value="v", raw_value="v", zone="neutral", nearby_text="t", position=0, score=0.5, features={})
+    rl = RankedLink(text="t", url="http://x.com", score=0.5)
     with pytest.raises(TypeError):
         GoalPreprocessed(type="injected", goal_context=None, duration_ms=1, source="fresh")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        LinksRanked(type="injected", page_url="http://x.com", total_links=1, top_links=[rl], duration_ms=1)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        CandidatesExtracted(type="injected", page_url="http://x.com", candidates=[c], duration_ms=1)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        ModelSkipped(type="injected", page_url="http://x.com", reason="ranker_confident", decision="d", confidence=0.9)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        DestinationVerificationFailed(type="injected", url="http://x.com", result=vr)  # type: ignore[call-arg]
 
 
 def test_phase_c_events_timestamps_are_strings():

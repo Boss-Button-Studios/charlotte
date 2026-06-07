@@ -313,9 +313,13 @@ class HybridPreprocessor:
     expand synonyms, and generate regex hints. Falls back silently to
     DeterministicPreprocessor on any failure (network, parse, or validation).
 
-    The model call is synchronous (httpx.Client). For fast crawls, configure a
-    small model — the default (deepseek-r1:14b) produces higher quality but adds
-    latency.
+    **Threading note:** The model call uses a synchronous ``httpx.Client``.
+    ``GoalPreprocessorProtocol.__call__`` is intentionally synchronous; the
+    engine (C4) will invoke it in a thread via ``asyncio.to_thread`` before
+    the async crawl loop starts, preventing event-loop blocking.
+
+    For fast crawls, configure a small model — the default (deepseek-r1:14b)
+    produces higher quality but adds latency.
     """
 
     model_id: str | None
