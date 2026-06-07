@@ -103,6 +103,15 @@ def find_link(
         max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
         user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT env
                               var, or the built-in default (charlotte-crawler/1.0).
+        preprocessor:         GoalPreprocessorProtocol instance used to extract
+                              anchor terms and classify the goal. None →
+                              DeterministicPreprocessor (no model calls).
+        ranker:               LinkRankerProtocol instance used to score and sort
+                              candidate links before the model call. None →
+                              BM25LinkRanker.
+        locale:               BCP 47 locale tag passed to the preprocessor (default:
+                              "en_US"). Affects stop-word filtering and goal
+                              classification in Phase B and later.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
