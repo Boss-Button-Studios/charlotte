@@ -10,6 +10,7 @@ from charlotte.core.goal_preprocessor import (
     DeterministicPreprocessor,
     HybridPreprocessor,
     InMemoryGoalContextCache,
+    _extract_json,
 )
 from charlotte.models import CACHE_FORMAT_VERSION, GoalContext
 
@@ -164,6 +165,59 @@ def test_cache_format_version_in_key():
 
 
 # ---------------------------------------------------------------------------
+# _extract_json — JSON extraction strategies
+# ---------------------------------------------------------------------------
+
+def test_extract_json_clean():
+    assert _extract_json('{"a": 1}') == {"a": 1}
+
+
+def test_extract_json_fence_json_tag():
+    content = '```json\n{"a": 1}\n```'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_fence_no_tag():
+    content = '```\n{"a": 1}\n```'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_prose_then_fence():
+    # Mirrors llama3.1 output: explanation text followed by fenced JSON.
+    content = (
+        "Here is the JSON context:\n\n"
+        "```json\n{\"goal_type\": \"navigation\"}\n```\n\n"
+        "Let me explain…"
+    )
+    result = _extract_json(content)
+    assert result["goal_type"] == "navigation"
+
+
+def test_extract_json_prose_surrounding_object():
+    # JSON embedded in prose without a code fence.
+    content = 'Sure! Here you go: {"goal_type": "navigation"} Hope that helps.'
+    assert _extract_json(content)["goal_type"] == "navigation"
+
+
+def test_extract_json_trailing_prose_after_object():
+    # raw_decode must stop at } and not fail on trailing text.
+    content = '{"a": 1} some trailing explanation'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_raises_when_no_json():
+    import pytest
+    with pytest.raises(ValueError, match="no parseable JSON"):
+        _extract_json("No JSON here at all.")
+
+
+def test_extract_json_invalid_fence_content_falls_to_strategy3():
+    # Fence contains non-JSON; strategy 3 should still find the object.
+    content = "```\nnot json\n```\n{\"a\": 2}"
+    assert _extract_json(content) == {"a": 2}
+
+
+# ---------------------------------------------------------------------------
 # HybridPreprocessor
 # ---------------------------------------------------------------------------
 
@@ -196,6 +250,29 @@ def test_hybrid_happy_path():
     assert "tutorial" in ctx.synonyms
     assert ctx.synonyms["tutorial"] == ["guide", "walkthrough", "introduction"]
     assert "tutorial" in ctx.anchor_terms
+
+
+@respx.mock
+def test_hybrid_accepts_fenced_json():
+    # Mirrors llama3.1:8b output — JSON wrapped in a code fence with surrounding prose.
+    fenced = (
+        "Here is the JSON context:\n\n"
+        f"```json\n{json.dumps(_VALID_HYBRID_OUTPUT)}\n```\n\n"
+        "Let me explain how I generated this JSON: …"
+    )
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(fenced))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert ctx.goal_type == "navigation"
+
+
+@respx.mock
+def test_hybrid_accepts_prose_wrapped_json():
+    # JSON embedded in prose without a fence — strategy 3.
+    wrapped = f"Sure, here you go: {json.dumps(_VALID_HYBRID_OUTPUT)} Hope that helps!"
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(wrapped))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
 
 
 @respx.mock

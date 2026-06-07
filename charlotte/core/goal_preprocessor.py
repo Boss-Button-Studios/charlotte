@@ -144,6 +144,8 @@ class DeterministicPreprocessor:
 # Matches reasoning-model think-blocks before the JSON answer.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+# Matches JSON wrapped in a markdown code fence (```json ... ``` or ``` ... ```).
+_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 # ANSI escape sequences and non-printable ASCII control chars (§4.5.4).
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
 
@@ -172,6 +174,47 @@ appear in the goal and MUST NOT overlap synonyms or anchor_terms
   "regex_hints"          — array of valid Python regex patterns for extracting the \
 answer (fact goals only); empty for navigation goals
   "description"          — one-sentence interpretation of the goal"""
+
+
+def _extract_json(content: str) -> dict:
+    """Extract a JSON object from model output using three fallback strategies.
+
+    Some models (llama3.1, gemma) wrap their answer in a markdown code fence
+    and/or surround it with prose. Try strategies in order:
+      1. Entire content is valid JSON.
+      2. JSON inside a markdown code fence (``` or ```json).
+      3. First ``{`` in the content — parse forward using raw_decode so trailing
+         prose after the closing ``}`` is silently ignored.
+
+    Raises ValueError if no parseable JSON object is found.
+    """
+    # Strategy 1: clean JSON
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: inside a code fence
+    fence = _FENCE_RE.search(content)
+    if fence:
+        try:
+            result = json.loads(fence.group(1).strip())
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: first { … } object, ignoring surrounding prose
+    start = content.find("{")
+    if start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(content, start)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError("no parseable JSON object found in model output")
 
 
 def _validate_hybrid_output(
@@ -371,7 +414,7 @@ class HybridPreprocessor:
             raise ValueError(f"malformed completion response: {exc}") from exc
         content = _THINK_RE.sub("", content).strip()
         content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
-        return _validate_hybrid_output(json.loads(content), goal, navigation_hint, locale,
+        return _validate_hybrid_output(_extract_json(content), goal, navigation_hint, locale,
                                        self._model)
 
 
