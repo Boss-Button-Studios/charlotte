@@ -1,6 +1,16 @@
-"""Unit tests for DeterministicPreprocessor and InMemoryGoalContextCache."""
+"""Unit tests for DeterministicPreprocessor, HybridPreprocessor, and InMemoryGoalContextCache."""
 
-from charlotte.core.goal_preprocessor import DeterministicPreprocessor, InMemoryGoalContextCache
+import json
+
+import httpx
+import pytest
+import respx
+
+from charlotte.core.goal_preprocessor import (
+    DeterministicPreprocessor,
+    HybridPreprocessor,
+    InMemoryGoalContextCache,
+)
 from charlotte.models import CACHE_FORMAT_VERSION, GoalContext
 
 
@@ -151,3 +161,140 @@ def test_cache_format_version_in_key():
         assert len(cache._store) == 2  # old + new
     finally:
         m.CACHE_FORMAT_VERSION = original  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# HybridPreprocessor
+# ---------------------------------------------------------------------------
+
+_HYBRID_ENDPOINT = "http://localhost:11434/v1/chat/completions"
+
+_VALID_HYBRID_OUTPUT = {
+    "goal_type": "navigation",
+    "goal_type_confidence": 0.9,
+    "synonyms": {"tutorial": ["guide", "walkthrough", "introduction"]},
+    "anchor_terms": ["tutorial", "python"],
+    "negative_terms": [],
+    "regex_hints": [],
+    "description": "User wants to find a beginner tutorial page",
+}
+
+
+def _mock_response(content: str) -> httpx.Response:
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+@respx.mock
+def test_hybrid_happy_path():
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(
+        json.dumps(_VALID_HYBRID_OUTPUT)
+    ))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.goal_type == "navigation"
+    assert ctx.source == "model"
+    assert ctx.model_used == "deepseek-r1:14b"
+    assert "tutorial" in ctx.synonyms
+    assert ctx.synonyms["tutorial"] == ["guide", "walkthrough", "introduction"]
+    assert "tutorial" in ctx.anchor_terms
+
+
+@respx.mock
+def test_hybrid_with_navigation_hint():
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(
+        json.dumps(_VALID_HYBRID_OUTPUT)
+    ))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", "top nav", "en_US")
+    assert ctx.navigation_hint == "top nav"
+    assert ctx.source == "model"
+
+
+@respx.mock
+def test_hybrid_strips_think_blocks():
+    content = f"<think>Let me analyze this.</think>\n{json.dumps(_VALID_HYBRID_OUTPUT)}"
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(content))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+
+
+@respx.mock
+def test_hybrid_falls_back_on_connection_error():
+    respx.post(_HYBRID_ENDPOINT).mock(side_effect=httpx.ConnectError("refused"))
+    ctx = HybridPreprocessor()("Find the contact page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_falls_back_on_bad_json():
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response("not { valid json"))
+    ctx = HybridPreprocessor()("Find the contact page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_falls_back_on_invalid_goal_type():
+    bad = {**_VALID_HYBRID_OUTPUT, "goal_type": "made_up_type"}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_synonym_key_not_in_goal_is_dropped():
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {"unrelated_term": ["something"]}}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert "unrelated_term" not in ctx.synonyms
+
+
+@respx.mock
+def test_hybrid_warning_recorded_for_dropped_synonym():
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {"unrelated_term": ["x"]}}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert any("near_miss" in w and "unrelated_term" in w for w in ctx.validation_warnings)
+
+
+@respx.mock
+def test_hybrid_invalid_regex_dropped_with_warning():
+    with_bad_regex = {**_VALID_HYBRID_OUTPUT, "regex_hints": ["[invalid", r"\d+"]}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(with_bad_regex)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert r"\d+" in ctx.regex_hints
+    assert "[invalid" not in ctx.regex_hints
+    assert any("regex_dropped" in w for w in ctx.validation_warnings)
+
+
+@respx.mock
+def test_hybrid_negative_term_in_goal_causes_fallback():
+    # "python" appears in the goal, so it's an invalid negative term → fallback
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {}, "anchor_terms": [],
+           "negative_terms": ["python"]}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_negative_term_overlapping_positive_causes_fallback():
+    # "tutorial" is an anchor_term, so it can't also be a negative_term
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {}, "negative_terms": ["tutorial"]}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+def test_hybrid_model_id_attribute():
+    p = HybridPreprocessor(model="llama3:8b")
+    assert p.model_id == "llama3:8b"
+
+
+def test_hybrid_custom_base_url():
+    p = HybridPreprocessor(base_url="http://myserver:8080")
+    assert "myserver:8080" in p._base_url
+
+
+def test_hybrid_satisfies_protocol():
+    from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
+    assert isinstance(HybridPreprocessor(), GoalPreprocessorProtocol)

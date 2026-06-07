@@ -3,19 +3,26 @@ Goal preprocessor — spec §4.
 
 GoalPreprocessorProtocol defines the callable interface. DeterministicPreprocessor
 is the Phase A default: tokenizes the goal into anchor_terms with no model calls.
+HybridPreprocessor (Phase B) calls a local model to expand synonyms and improve
+goal-type classification, falling back to DeterministicPreprocessor on any failure.
 InMemoryGoalContextCache caches GoalContext objects within a single crawl.
-
-Phase B will add HybridPreprocessor (model-assisted synonym expansion).
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
+
+import httpx
 
 import charlotte.models as _models
 from charlotte.core.text_normalization import normalize_text, tokenize
 from charlotte.models import GoalContext, GoalType
+
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Protocol
@@ -128,6 +135,236 @@ class DeterministicPreprocessor:
             locale=locale,
             validation_warnings=[],
         )
+
+
+# ---------------------------------------------------------------------------
+# HybridPreprocessor — model-assisted synonym expansion (Phase B, spec §4.4)
+# ---------------------------------------------------------------------------
+
+# Matches reasoning-model think-blocks before the JSON answer.
+_THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+_LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+# ANSI escape sequences and non-printable ASCII control chars (§4.5.4).
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
+
+_HYBRID_BASE_URL = "http://localhost:11434"
+_HYBRID_MODEL = "deepseek-r1:14b"
+_COMPLETIONS_PATH = "/v1/chat/completions"
+
+_GOAL_TYPES: frozenset[str] = frozenset({
+    "navigation", "phone_extraction", "date_extraction", "address_extraction",
+    "price_extraction", "document_link", "freeform_fact",
+})
+
+_HYBRID_SYSTEM = """\
+You are a goal-context analyzer for a web crawler. Given a navigation or \
+information-extraction goal, return JSON context to guide the crawl.
+
+JSON fields:
+  "goal_type"            — one of: navigation, phone_extraction, date_extraction, \
+address_extraction, price_extraction, document_link, freeform_fact
+  "goal_type_confidence" — float 0.0-1.0
+  "synonyms"             — object mapping key terms (verbatim in goal text) to \
+lists of alternative phrasings; keys MUST appear in the goal
+  "anchor_terms"         — array of key tokens or short phrases from the goal
+  "negative_terms"       — array of terms indicating the wrong page; MUST NOT \
+appear in the goal and MUST NOT overlap synonyms or anchor_terms
+  "regex_hints"          — array of valid Python regex patterns for extracting the \
+answer (fact goals only); empty for navigation goals
+  "description"          — one-sentence interpretation of the goal"""
+
+
+def _validate_hybrid_output(
+    raw: dict,
+    goal: str,
+    navigation_hint: str | None,
+    locale: str,
+    model_used: str,
+) -> GoalContext:
+    """Validate model output per §4.5 and return GoalContext. Raises ValueError on rejection."""
+    warnings: list[str] = []
+
+    def _san(s: object, field: str) -> str:
+        """§4.5.4: strip ANSI escape sequences and ASCII control characters."""
+        text = s if isinstance(s, str) else str(s)
+        clean = _CTRL_RE.sub("", text)
+        if clean != text:
+            warnings.append(f"sanitization: control chars stripped from {field}")
+        return clean
+
+    # §4.5.2 goal_type
+    goal_type_raw = _san(raw.get("goal_type", ""), "goal_type")
+    if goal_type_raw not in _GOAL_TYPES:
+        raise ValueError(f"invalid goal_type: {goal_type_raw!r}")
+    goal_type: GoalType = goal_type_raw  # type: ignore[assignment]
+
+    # §4.5.2 goal_type_confidence
+    conf = raw.get("goal_type_confidence")
+    if not isinstance(conf, (int, float)) or not (0.0 <= float(conf) <= 1.0):
+        raise ValueError(f"invalid goal_type_confidence: {conf!r}")
+
+    # §4.5.1 normalize goal + hint for all boundary checks
+    goal_norm = normalize_text(goal)
+    hint_norm = normalize_text(navigation_hint or "")
+    combined_norm = f"{goal_norm} {hint_norm}".strip()
+
+    def _in_combined(term_norm: str) -> bool:
+        return bool(re.search(
+            r"(?<![a-z0-9])" + re.escape(term_norm) + r"(?![a-z0-9])",
+            combined_norm,
+        ))
+
+    # §4.5.2 synonyms — keys must appear in goal/hint (token-boundary, case-insensitive)
+    raw_synonyms = raw.get("synonyms") or {}
+    synonyms: dict[str, list[str]] = {}
+    if isinstance(raw_synonyms, dict):
+        for k, v in raw_synonyms.items():
+            k_clean = _san(k, "synonyms key")
+            if not _in_combined(normalize_text(k_clean)):
+                warnings.append(f"near_miss: synonym key {k_clean!r} not in goal/hint, dropped")
+                continue
+            synonyms[k_clean] = [_san(vv, "synonym value")
+                                  for vv in (v if isinstance(v, list) else [])
+                                  if isinstance(vv, str)]
+
+    # §4.5.2 anchor_terms — must be tokens/sequences from goal/hint
+    raw_anchors = raw.get("anchor_terms") or []
+    anchor_terms: list[str] = []
+    if isinstance(raw_anchors, list):
+        for t in raw_anchors:
+            if not isinstance(t, str):
+                continue
+            t_clean = _san(t, "anchor_term")
+            if not _in_combined(normalize_text(t_clean)):
+                warnings.append(f"near_miss: anchor_term {t_clean!r} not in goal/hint, dropped")
+                continue
+            anchor_terms.append(t_clean)
+    if not anchor_terms:
+        raw_tokens = tokenize(goal) + (tokenize(navigation_hint) if navigation_hint else [])
+        anchor_terms = [tok for tok in raw_tokens if tok not in _STOP_WORDS and len(tok) > 1]
+
+    # §4.5.2 regex_hints — compile each; drop invalid (record in warnings)
+    raw_regex = raw.get("regex_hints") or []
+    regex_hints: list[str] = []
+    if isinstance(raw_regex, list):
+        for pattern in raw_regex:
+            if not isinstance(pattern, str):
+                continue
+            p_clean = _san(pattern, "regex_hint")
+            try:
+                re.compile(p_clean)
+                regex_hints.append(p_clean)
+            except re.error as exc:
+                warnings.append(f"regex_dropped: {exc}: {p_clean!r}")
+
+    # §4.5.3 negative_terms — must not overlap positives or appear in goal/hint
+    raw_negatives = raw.get("negative_terms") or []
+    positive_norms = (
+        {normalize_text(k) for k in synonyms}
+        | {normalize_text(v) for vs in synonyms.values() for v in vs}
+        | {normalize_text(t) for t in anchor_terms}
+    )
+    negative_terms: list[str] = []
+    if isinstance(raw_negatives, list):
+        for nt in raw_negatives:
+            if not isinstance(nt, str):
+                continue
+            nt_clean = _san(nt, "negative_term")
+            nt_norm = normalize_text(nt_clean)
+            if _in_combined(nt_norm):
+                raise ValueError(f"negative_term {nt_clean!r} appears in goal/hint")
+            if nt_norm in positive_norms:
+                raise ValueError(f"negative_term {nt_clean!r} overlaps positive terms")
+            negative_terms.append(nt_clean)
+
+    description = _san(str(raw.get("description", "")), "description")
+
+    # §4.5.5 rough 4KB size cap on post-normalization context
+    size_estimate = (
+        len(goal) + len(navigation_hint or "") + len(description)
+        + sum(len(k) + sum(len(v) for v in vs) for k, vs in synonyms.items())
+        + sum(len(t) for t in anchor_terms + negative_terms + regex_hints)
+    )
+    if size_estimate > 4096:
+        raise ValueError(f"GoalContext exceeds 4KB cap ({size_estimate} bytes)")
+
+    return GoalContext(
+        goal=goal,
+        navigation_hint=navigation_hint,
+        goal_type=goal_type,
+        goal_type_confidence=float(conf),
+        synonyms=synonyms,
+        anchor_terms=anchor_terms,
+        negative_terms=negative_terms,
+        regex_hints=regex_hints,
+        description=description,
+        source="model",
+        model_used=model_used,
+        created_at=datetime.now(timezone.utc),
+        locale=locale,
+        validation_warnings=warnings,
+    )
+
+
+class HybridPreprocessor:
+    """Phase B preprocessor — model-assisted synonym expansion (spec §4.4).
+
+    Calls a local OpenAI-compatible inference server to classify the goal type,
+    expand synonyms, and generate regex hints. Falls back silently to
+    DeterministicPreprocessor on any failure (network, parse, or validation).
+
+    The model call is synchronous (httpx.Client). For fast crawls, configure a
+    small model — the default (deepseek-r1:14b) produces higher quality but adds
+    latency.
+    """
+
+    model_id: str | None
+
+    def __init__(
+        self,
+        *,
+        base_url: str = _HYBRID_BASE_URL,
+        model: str = _HYBRID_MODEL,
+        timeout: float | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._timeout = timeout
+        self._fallback = DeterministicPreprocessor()
+        self.model_id = model
+
+    def __call__(
+        self,
+        goal: str,
+        navigation_hint: str | None,
+        locale: str,
+    ) -> GoalContext:
+        try:
+            return self._call_model(goal, navigation_hint, locale)
+        except Exception:
+            _logger.debug("HybridPreprocessor fell back to DeterministicPreprocessor",
+                          exc_info=True)
+            return self._fallback(goal, navigation_hint, locale)
+
+    def _call_model(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
+        hint_line = f"\nNavigation hint: {navigation_hint}" if navigation_hint else ""
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _HYBRID_SYSTEM},
+                {"role": "user", "content": f"Goal: {goal}{hint_line}"},
+            ],
+            "format": "json",
+        }
+        with httpx.Client(timeout=self._timeout or 30.0) as client:
+            resp = client.post(f"{self._base_url}{_COMPLETIONS_PATH}", json=payload)
+        resp.raise_for_status()
+
+        content = resp.json()["choices"][0]["message"]["content"]
+        content = _THINK_RE.sub("", content).strip()
+        content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
+        return _validate_hybrid_output(json.loads(content), goal, navigation_hint, locale,
+                                       self._model)
 
 
 # ---------------------------------------------------------------------------
