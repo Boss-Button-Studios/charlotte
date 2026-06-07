@@ -47,6 +47,7 @@ jobs:
 
       - name: Run pip-audit
         run: |
+          pip install --upgrade pip
           pip install pip-audit
           pip install -e ".[dev,groq]"
           pip-audit

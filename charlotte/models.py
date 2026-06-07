@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Literal, Union
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +40,55 @@ class TrustLevel(Enum):
     SEMI_TRUSTED = "semi_trusted"  # Model output — produced by a trusted component
                                    # operating on untrusted input; must be validated
     PROMOTED = "promoted"        # Model output that passed provenance + plausibility
+
+
+# ---------------------------------------------------------------------------
+# v2 goal context (spec §4.2)
+# ---------------------------------------------------------------------------
+
+#: Module-level constant bumped on any release that changes preprocessor logic,
+#: default regex patterns, locale-sensitive extractor behavior, normalization
+#: rules, or validation rules. Coarse but safe — invalidates all cached entries.
+CACHE_FORMAT_VERSION: int = 1
+
+GoalType = Literal[
+    "navigation",
+    "phone_extraction",
+    "date_extraction",
+    "address_extraction",
+    "price_extraction",
+    "document_link",
+    "freeform_fact",
+]
+
+
+@dataclass(frozen=True)
+class GoalContext:
+    """Preprocessed goal representation consumed by v2 pipeline components.
+
+    Produced by a GoalPreprocessorProtocol and cached via GoalContextCacheProtocol.
+    Immutable — any modification requires creating a new instance. See spec §4.2.
+    """
+    goal: str
+    navigation_hint: Union[str, None]
+    goal_type: GoalType
+    goal_type_confidence: float
+    # Keys must appear in goal/navigation_hint (§4.5.2); values are expansions.
+    synonyms: dict[str, list[str]]
+    # Tokens or token sequences from goal/navigation_hint (§4.5.2).
+    anchor_terms: list[str]
+    negative_terms: list[str]
+    # Compiled-valid patterns only — invalid ones dropped with a validation_warning.
+    regex_hints: list[str]
+    # Human-readable interpretation — diagnostic use only, do not branch on it.
+    description: str
+    source: Literal["model", "deterministic", "caller_supplied"]
+    model_used: Union[str, None]
+    created_at: datetime
+    locale: str
+    # Structured surface for silent drops, normalization changes, sanitization
+    # actions (§4.2). Each entry uses a stable prefix tag, e.g. "regex_dropped:".
+    validation_warnings: list[str]
 
 
 # ---------------------------------------------------------------------------

@@ -1,27 +1,26 @@
 """
-Crawl engine — BFS crawl loop, streaming events, budget controls (CHAR-013).
+Crawl engine — BFS/priority crawl loop, streaming events, budget controls.
 
-CHAR-013: crawl() public function; full BFS loop; streaming events; budget.
-
-Adapter output validation (CHAR-006) lives in adapter_validation.py.
-
-See spec §4, §5.1, §12, §17.
+Adapter output validation lives in adapter_validation.py. See spec §4, §5.1, §12, §17.
 """
 
 from __future__ import annotations
 
+import heapq
 import logging
 import math
 import re
-from collections import deque
 from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.adapter_validation import call_with_validation
+from charlotte.core.engine_support import _elapsed_ms, _empty_result, _rank_links, _resolve_default_adapter
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
+from charlotte.core.goal_preprocessor import DeterministicPreprocessor
+from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
 from charlotte.core.provenance import check_provenance
@@ -51,27 +50,11 @@ from charlotte.models import (
 
 if TYPE_CHECKING:
     from charlotte.adapters.base import AdapterProtocol
+    from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
+    from charlotte.core.link_ranker import LinkRankerProtocol
+    from charlotte.models import GoalContext
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Default adapter resolution (spec §5.1, §6.3)
-# ---------------------------------------------------------------------------
-
-def _resolve_default_adapter() -> "AdapterProtocol":
-    """Instantiate the default adapter from CharlotteConfig (spec §5.1).
-
-    Consults CHARLOTTE_DEFAULT_ADAPTER ('local' or 'groq'). Falls back to
-    LocalAdapter. Each constructor raises CharlotteConfigError with a clear
-    message if its requirements are not met.
-    """
-    adapter_name = CharlotteConfig.default_adapter()
-    if adapter_name == "groq":
-        from charlotte.adapters.groq import GroqAdapter
-        return GroqAdapter()
-    from charlotte.adapters.local import LocalAdapter
-    return LocalAdapter()
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +83,9 @@ def crawl(
     chromium_executable: "str | None" = None,
     max_response_bytes: int = 10 * 1024 * 1024,
     user_agent: "str | None" = None,
+    preprocessor: "GoalPreprocessorProtocol | None" = None,
+    ranker: "LinkRankerProtocol | None" = None,
+    locale: str = "en_US",
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Navigate toward *goal* starting from *start_url*.
 
@@ -174,6 +160,10 @@ def crawl(
 
     resolved_user_agent = user_agent if user_agent is not None else CharlotteConfig.user_agent()
 
+    _preprocessor = preprocessor or DeterministicPreprocessor()
+    _ranker = ranker or BM25LinkRanker()
+    goal_context = _preprocessor(goal, navigation_hint, locale)
+
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     _domains: frozenset[str]
     if allowed_domains is None:
@@ -208,6 +198,8 @@ def crawl(
         chromium_executable=chromium_executable,
         max_response_bytes=max_response_bytes,
         user_agent=resolved_user_agent,
+        goal_context=goal_context,
+        ranker=_ranker,
     )
 
     if stream:
@@ -247,6 +239,8 @@ async def _crawl_core(
     chromium_executable: "str | None",
     max_response_bytes: int,
     user_agent: str,
+    goal_context: "GoalContext",
+    ranker: "LinkRankerProtocol",
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
 
@@ -289,7 +283,15 @@ async def _crawl_core(
         user_agent=user_agent,
     )
 
-    queue: deque[tuple[str, int]] = deque([(start_url, 0)])
+    # Priority queue: (neg_score, serial, url, depth). Heapq is a min-heap so
+    # we negate the BM25 score to pop highest-relevance links first. Serial
+    # ensures a stable tiebreak for equal scores (FIFO within same score).
+    _q_serial = 0
+    queue: list[tuple[float, int, str, int]] = []
+    heapq.heappush(queue, (0.0, _q_serial, start_url, 0))
+    _q_serial += 1
+    score_map: dict[str, float] = {}
+
     visited: set[str] = set()
     result_urls: list[str] = []
     answers_list: list[str | None] = []
@@ -302,7 +304,7 @@ async def _crawl_core(
     depth_budget_used = False
 
     while queue and pages_visited < max_pages:
-        url, depth = queue.popleft()
+        _, _, url, depth = heapq.heappop(queue)
 
         try:
             norm = normalize_url(url)
@@ -349,6 +351,14 @@ async def _crawl_core(
         clean = strip_hidden(page.html)
         extracted = extract(clean, page_url=page.url)
 
+        # Rank links by BM25 relevance to the goal before the model call so
+        # the model receives candidates in best-first order. score_map is also
+        # used at enqueue time to populate the priority queue.
+        _rl = _rank_links(ranker, goal_context, extracted.links)
+        _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
+        ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
+        score_map = {normalize_url(u): s for u, s in _rl}
+
         # Model call — include the current page in history so the model
         # doesn't recommend it as a next step when it's already standing on it.
         history = [e.url for e in visit_log[-10:]] + [page.url]
@@ -360,7 +370,7 @@ async def _crawl_core(
                 page_title=extracted.title,
                 page_url=page.url,
                 page_summary=extracted.text,
-                available_links=extracted.links,
+                available_links=ranked_links,
                 visit_history=history,
                 results_so_far=len(result_urls),
             )
@@ -395,11 +405,15 @@ async def _crawl_core(
                     )
                     clean = strip_hidden(page.html)
                     extracted = extract(clean, page_url=page.url)
+                    _rl = _rank_links(ranker, goal_context, extracted.links)
+                    _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
+                    ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
+                    score_map = {normalize_url(u): s for u, s in _rl}
                     history = [e.url for e in visit_log[-10:]] + [page.url]
                     output = await call_with_validation(
                         model, goal=goal, navigation_hint=navigation_hint,
                         page_title=extracted.title, page_url=page.url,
-                        page_summary=extracted.text, available_links=extracted.links,
+                        page_summary=extracted.text, available_links=ranked_links,
                         visit_history=history, results_so_far=len(result_urls),
                     )
                 except AdapterOutputError as exc:
@@ -427,7 +441,7 @@ async def _crawl_core(
                     output = await call_with_validation(
                         model, goal=goal, navigation_hint=navigation_hint,
                         page_title=extracted.title, page_url=page.url,
-                        page_summary=extracted.text, available_links=extracted.links,
+                        page_summary=extracted.text, available_links=ranked_links,
                         visit_history=history, results_so_far=len(result_urls),
                         schema_hint=hint,
                     )
@@ -500,7 +514,7 @@ async def _crawl_core(
             reasoning=output.reasoning,
         ))
 
-        # Enqueue confirmed links
+        # Enqueue confirmed links — priority ordered by BM25 score from score_map.
         enqueued = 0
         for link_url in effective_links:
             next_depth = depth + 1
@@ -516,7 +530,9 @@ async def _crawl_core(
                 continue
             if norm_link in visited:
                 continue
-            queue.append((link_url, next_depth))
+            _score = score_map.get(norm_link, 0.0)
+            heapq.heappush(queue, (-_score, _q_serial, link_url, next_depth))
+            _q_serial += 1
             enqueued += 1
 
         yield ModelDecision(
@@ -581,19 +597,3 @@ async def _crawl_core(
     )
 
 
-def _empty_result(*, budget_exhausted: bool) -> CrawlResult:
-    return CrawlResult(
-        found=False,
-        result_urls=[],
-        content=None,
-        confidence=0.0,
-        pages_visited=0,
-        depth_reached=0,
-        visit_log=[],
-        best_candidate_url=None,
-        budget_exhausted=budget_exhausted,
-    )
-
-
-def _elapsed_ms(start: float) -> int:
-    return int((monotonic() - start) * 1000)
