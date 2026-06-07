@@ -182,6 +182,14 @@ class PageFetched:
 
 
 @dataclass
+class ModelEvaluating:
+    """Emitted just before the model is called, so callers know work is in progress."""
+    url: str
+    type: Literal["model_evaluating"] = field(default="model_evaluating", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+@dataclass
 class ModelDecision:
     """Emitted after the navigator model evaluates a page."""
     url: str
@@ -248,6 +256,7 @@ class CrawlComplete:
 StreamEvent = (
     CrawlStarted
     | PageFetched
+    | ModelEvaluating
     | ModelDecision
     | ResultFound
     | PageSkipped

@@ -36,6 +36,7 @@ from charlotte.models import (
     CrawlComplete,
     CrawlStarted,
     ModelDecision,
+    ModelEvaluating,
     PageFetched,
     PageSkipped,
     ResultFound,
@@ -213,6 +214,9 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
                 result.events.append({"type": "PageFetched", "elapsed_ms": elapsed_ms,
                                        "url": event.url, "depth": event.depth,
                                        "http_status": event.http_status, "fetch_ms": event.fetch_ms})
+
+            elif isinstance(event, ModelEvaluating):
+                print(f"         thinking...", flush=True)
 
             elif isinstance(event, ModelDecision):
                 result.events.append({"type": "ModelDecision", "elapsed_ms": elapsed_ms,
