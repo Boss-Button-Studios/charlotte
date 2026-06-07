@@ -22,7 +22,6 @@ the part of the design most likely to need iteration against real-world pages.
 from __future__ import annotations
 
 import re
-import unicodedata
 from datetime import date as _date
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
