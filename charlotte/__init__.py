@@ -25,18 +25,29 @@ from charlotte.exceptions import (
 )
 from charlotte.models import (
     BudgetExhausted,
+    Candidate,
+    CandidatesExtracted,
     CrawlComplete,
     CrawlResult,
     CrawlStarted,
+    DestinationVerificationFailed,
+    FailureMode,
     GoalContext,
+    GoalPreprocessed,
     LinkResult,
+    LinksRanked,
     ModelDecision,
     ModelEvaluating,
+    ModelSkipped,
     PageFetched,
     PageSkipped,
+    RankedLink,
+    ResultContent,
+    ResultContentMetadata,
     ResultFound,
     StreamEvent,
     TrustLevel,
+    VerificationResult,
     VisitLogEntry,
 )
 
@@ -52,6 +63,13 @@ __all__ = [
     "GoalContext",
     "LinkResult",
     "VisitLogEntry",
+    # v2 Phase C data types
+    "Candidate",
+    "FailureMode",
+    "RankedLink",
+    "ResultContent",
+    "ResultContentMetadata",
+    "VerificationResult",
     # Streaming events
     "CrawlStarted",
     "PageFetched",
@@ -62,6 +80,12 @@ __all__ = [
     "BudgetExhausted",
     "CrawlComplete",
     "StreamEvent",
+    # v2 Phase C streaming events
+    "CandidatesExtracted",
+    "DestinationVerificationFailed",
+    "GoalPreprocessed",
+    "LinksRanked",
+    "ModelSkipped",
     # Trust level
     "TrustLevel",
     # Exceptions

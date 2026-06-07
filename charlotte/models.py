@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Literal, Union
 
 
@@ -92,6 +93,76 @@ class GoalContext:
 
 
 # ---------------------------------------------------------------------------
+# v2 Phase C data types (spec §6, §7)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RankedLink:
+    """A single link with its computed ranking score. See spec §5.3."""
+    text: str
+    url: str
+    score: float
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A single extracted candidate value with scoring features. See spec §6.2."""
+    value: str                           # Normalized candidate value.
+    raw_value: str                       # As extracted from the page, before normalization.
+    zone: Literal["content", "neutral", "chrome"]
+    nearby_text: str                     # Surrounding text window used for scoring.
+    position: int                        # Character offset in the sanitized page text.
+    score: float                         # Composite score; higher is better.
+    # Scoring component breakdown — keys are stable (e.g. "zone_weight",
+    # "anchor_proximity", "negative_proximity", "format_quality", "uniqueness").
+    features: dict[str, float]
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    """Outcome of a single destination verification check. See spec §7."""
+    url: str
+    passed: bool
+    mode: Literal["off", "existence", "relevance", "full"]
+    score: float | None   # BM25 or similarity score; None when mode="off".
+    reason: str
+
+
+class FailureMode(StrEnum):
+    """Why a crawl ended without a confirmed result. See spec §7.6."""
+    NO_CANDIDATES_FOUND = "no_candidates_found"
+    ALL_CANDIDATES_REJECTED = "all_candidates_rejected"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    PLAUSIBILITY_FAILURES = "plausibility_failures"
+    FETCH_FAILURES = "fetch_failures"
+
+
+@dataclass(frozen=True)
+class ResultContentMetadata:
+    """Lightweight content metadata emitted in stream events (no bytes). See spec §7.7."""
+    content_type: str | None
+    content_length: int
+    suggested_filename: str | None
+    etag: str | None
+
+
+@dataclass(frozen=True)
+class ResultContent:
+    """Full content payload stored in CrawlResult / LinkResult. See spec §7.7.
+
+    The verification fetch is reused for content delivery — no second round trip.
+    `file_path` is set when the caller passed `save_to` in the crawl options.
+    """
+    content: bytes | None
+    content_type: str | None
+    content_length: int
+    suggested_filename: str | None
+    etag: str | None
+    fetched_at: datetime
+    file_path: Path | None
+
+
+# ---------------------------------------------------------------------------
 # Visit log
 # ---------------------------------------------------------------------------
 
@@ -133,6 +204,15 @@ class CrawlResult:
     # Extracted answer text per result, parallel to result_urls. None per element when
     # the model did not extract an answer (navigation goals). Null when found=False.
     answers: list[str | None] | None = None
+    # Set when the crawl ended without a confirmed result (v2).
+    failure_mode: FailureMode | None = None
+    # The preprocessed goal that drove this crawl (v2).
+    goal_context: GoalContext | None = None
+    # Verification outcomes, parallel to result_urls (v2).
+    verified_candidates: list[VerificationResult] = field(default_factory=list)
+    # Full content payloads, parallel to result_urls (v2). None per slot when
+    # content delivery was not requested or the fetch failed.
+    result_contents: list[ResultContent | None] = field(default_factory=list)
 
 
 @dataclass
@@ -149,6 +229,8 @@ class LinkResult:
     best_candidate_url: str | None
     budget_exhausted: bool
     note: str | None         # Plain-language explanation when found=False.
+    # Full content payload when the caller requested content delivery (v2).
+    result_content: ResultContent | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +295,8 @@ class ResultFound:
     result_index: int        # 1-based index within this crawl.
     # Verbatim extracted value for factual goals; null for navigation goals.
     answer: str | None = None
+    # Lightweight content metadata when content delivery was requested (v2).
+    content_metadata: ResultContentMetadata | None = None
     type: Literal["result_found"] = field(default="result_found", init=False)
     timestamp: str = field(default_factory=_now)
 
@@ -245,7 +329,70 @@ class CrawlComplete:
     pages_visited: int
     depth_reached: int
     elapsed_ms: int
+    # Set when the crawl ended without a confirmed result (v2).
+    failure_mode: FailureMode | None = None
+    # Human-readable explanation of the failure mode (v2).
+    failure_reason: str | None = None
+    # The preprocessed goal that drove this crawl (v2).
+    goal_context: GoalContext | None = None
     type: Literal["crawl_complete"] = field(default="crawl_complete", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+# ---------------------------------------------------------------------------
+# v2 Phase C streaming events (spec §17)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GoalPreprocessed:
+    """Emitted after goal preprocessing completes (or is skipped)."""
+    goal_context: GoalContext | None
+    duration_ms: int
+    source: Literal["fresh", "cached", "caller_supplied"]
+    type: Literal["goal_preprocessed"] = field(default="goal_preprocessed", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+@dataclass
+class LinksRanked:
+    """Emitted after the link ranker scores all links on a page."""
+    page_url: str
+    total_links: int
+    top_links: list[RankedLink]   # Capped at 10 entries.
+    duration_ms: int
+    type: Literal["links_ranked"] = field(default="links_ranked", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+@dataclass
+class CandidatesExtracted:
+    """Emitted after the candidate extractor runs on a page."""
+    page_url: str
+    candidates: list[Candidate]
+    duration_ms: int
+    type: Literal["candidates_extracted"] = field(default="candidates_extracted", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+@dataclass
+class ModelSkipped:
+    """Emitted when the pipeline bypasses the model due to high extractor confidence."""
+    page_url: str
+    reason: Literal["ranker_confident", "single_candidate_confident"]
+    decision: str
+    confidence: float
+    type: Literal["model_skipped"] = field(default="model_skipped", init=False)
+    timestamp: str = field(default_factory=_now)
+
+
+@dataclass
+class DestinationVerificationFailed:
+    """Emitted when a candidate URL fails destination verification."""
+    url: str
+    result: VerificationResult
+    type: Literal["destination_verification_failed"] = field(
+        default="destination_verification_failed", init=False
+    )
     timestamp: str = field(default_factory=_now)
 
 
@@ -262,4 +409,9 @@ StreamEvent = (
     | PageSkipped
     | BudgetExhausted
     | CrawlComplete
+    | GoalPreprocessed
+    | LinksRanked
+    | CandidatesExtracted
+    | ModelSkipped
+    | DestinationVerificationFailed
 )
