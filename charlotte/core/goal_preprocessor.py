@@ -147,11 +147,16 @@ _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORE
 # Matches JSON wrapped in a markdown code fence (```json ... ``` or ``` ... ```).
 _FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 # Python raw-string literal: r"..." — some models write regex patterns this way.
-# Capture group 1 is the inner content (no embedded double quotes).
-_RAWSTR_RE = re.compile(r'r"([^"]*)"')
+# \b ensures we only match a standalone r token (not the r at the end of a word
+# like "manager"), since r"..." is only valid Python syntax after non-word chars.
+_RAWSTR_RE = re.compile(r'\br"([^"]*)"')
 # JavaScript-style // comment at end of a JSON line.
 # Requires at least one space/tab before // so we don't match :// inside URLs.
 _JSON_COMMENT_RE = re.compile(r'(?<!:)[ \t]+//[^\n]*')
+# Python-style implicit string concatenation: "a"\n"b" → "a",\n"b".
+# JSON strings can't contain unescaped quotes, so this only fires between two
+# separate string literals that are missing a comma separator.
+_ADJACENT_STRINGS_RE = re.compile(r'"(\s+)"')
 # ANSI escape sequences and non-printable ASCII control chars (§4.5.4).
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
 
@@ -209,18 +214,21 @@ Respond with JSON only — no explanation text, no code fences, no markdown."""
 def _clean_model_json(content: str) -> str:
     """Strip model-specific syntax that makes otherwise-valid JSON unparseable.
 
-    Handles two patterns observed in llama3.1 / codellama output:
+    Handles three patterns observed in llama3.1 / codellama output:
       - Python raw-string literals: ``r"\\b..."`` → ``"\\\\b..."``
         (backslashes are double-escaped so they survive json.loads as literals)
       - JavaScript ``//`` end-of-line comments (e.g. after a closing ``]``)
         Requires at least one space/tab before ``//`` so ``://`` inside URLs
         is never touched.
+      - Python-style implicit string concatenation: ``"a"\\n"b"`` → ``"a",\\n"b"``
+        (missing comma between adjacent string literals in an array)
     """
     def _fix_raw(m: re.Match) -> str:
         return '"' + m.group(1).replace("\\", "\\\\") + '"'
 
     content = _RAWSTR_RE.sub(_fix_raw, content)
     content = _JSON_COMMENT_RE.sub("", content)
+    content = _ADJACENT_STRINGS_RE.sub('",\n"', content)
     return content
 
 

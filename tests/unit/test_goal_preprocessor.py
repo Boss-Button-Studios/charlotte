@@ -196,6 +196,13 @@ def test_clean_does_not_strip_url_slashes():
     assert "https://example.com/path" in result
 
 
+def test_clean_inserts_comma_between_adjacent_strings():
+    # Python implicit string concatenation: "a"\n"b" → "a",\n"b"
+    raw = '{"synonyms": {"x": ["foo"\n                     "bar"]}}'
+    parsed = json.loads(_clean_model_json(raw))
+    assert parsed["synonyms"]["x"] == ["foo", "bar"]
+
+
 def test_clean_llama31_bulletin_output():
     # Exact shape from the failing llama3.1:8b run.
     raw = (
@@ -213,6 +220,30 @@ def test_clean_llama31_bulletin_output():
     parsed = json.loads(_clean_model_json(raw))
     assert parsed["synonyms"]["bulletin"] == ["update", "notice"]
     # Regex hint has backslashes properly escaped — compiles as a valid pattern.
+    import re
+    assert re.compile(parsed["regex_hints"][0])
+
+
+def test_clean_llama31_phone_manager_output():
+    # Exact shape from the failing llama3.1:8b run: raw strings + missing comma.
+    raw = (
+        '{\n'
+        '  "goal_type": "phone_extraction",\n'
+        '  "goal_type_confidence": 0.95,\n'
+        '  "synonyms": {\n'
+        '    "assistant manager": ["shop supervisor", "store manager"],\n'
+        '    "phone number": ["phonenumber", "phone contact"\n'
+        '                     "contact info"]\n'
+        '  },\n'
+        '  "anchor_terms": ["assistant manager", "phone number"],\n'
+        '  "negative_terms": ["customer service"],\n'
+        r'  "regex_hints": [r"\d{3}-\d{3}-\d{4}"],'
+        '\n'
+        '  "description": "Find the phone number of an assistant manager."\n'
+        '}'
+    )
+    parsed = json.loads(_clean_model_json(raw))
+    assert "contact info" in parsed["synonyms"]["phone number"]
     import re
     assert re.compile(parsed["regex_hints"][0])
 
