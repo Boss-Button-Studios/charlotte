@@ -146,6 +146,12 @@ _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGN
 _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 # Matches JSON wrapped in a markdown code fence (```json ... ``` or ``` ... ```).
 _FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
+# Python raw-string literal: r"..." — some models write regex patterns this way.
+# Capture group 1 is the inner content (no embedded double quotes).
+_RAWSTR_RE = re.compile(r'r"([^"]*)"')
+# JavaScript-style // comment at end of a JSON line.
+# Requires at least one space/tab before // so we don't match :// inside URLs.
+_JSON_COMMENT_RE = re.compile(r'(?<!:)[ \t]+//[^\n]*')
 # ANSI escape sequences and non-printable ASCII control chars (§4.5.4).
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
 
@@ -200,11 +206,28 @@ Example output:
 Respond with JSON only — no explanation text, no code fences, no markdown."""
 
 
+def _clean_model_json(content: str) -> str:
+    """Strip model-specific syntax that makes otherwise-valid JSON unparseable.
+
+    Handles two patterns observed in llama3.1 / codellama output:
+      - Python raw-string literals: ``r"\\b..."`` → ``"\\\\b..."``
+        (backslashes are double-escaped so they survive json.loads as literals)
+      - JavaScript ``//`` end-of-line comments (e.g. after a closing ``]``)
+        Requires at least one space/tab before ``//`` so ``://`` inside URLs
+        is never touched.
+    """
+    def _fix_raw(m: re.Match) -> str:
+        return '"' + m.group(1).replace("\\", "\\\\") + '"'
+
+    content = _RAWSTR_RE.sub(_fix_raw, content)
+    content = _JSON_COMMENT_RE.sub("", content)
+    return content
+
+
 def _extract_json(content: str) -> dict:
     """Extract a JSON object from model output using three fallback strategies.
 
-    Some models (llama3.1, gemma) wrap their answer in a markdown code fence
-    and/or surround it with prose. Try strategies in order:
+    Applies _clean_model_json first, then tries strategies in order:
       1. Entire content is valid JSON.
       2. JSON inside a markdown code fence (``` or ```json).
       3. First ``{`` in the content — parse forward using raw_decode so trailing
@@ -212,6 +235,8 @@ def _extract_json(content: str) -> dict:
 
     Raises ValueError if no parseable JSON object is found.
     """
+    content = _clean_model_json(content)
+
     # Strategy 1: clean JSON
     try:
         return json.loads(content)

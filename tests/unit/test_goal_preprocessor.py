@@ -10,6 +10,7 @@ from charlotte.core.goal_preprocessor import (
     DeterministicPreprocessor,
     HybridPreprocessor,
     InMemoryGoalContextCache,
+    _clean_model_json,
     _extract_json,
 )
 from charlotte.models import CACHE_FORMAT_VERSION, GoalContext
@@ -165,6 +166,58 @@ def test_cache_format_version_in_key():
 
 
 # ---------------------------------------------------------------------------
+# _clean_model_json — pre-parse cleanup
+# ---------------------------------------------------------------------------
+
+def test_clean_strips_raw_string_prefix():
+    # r"\b..." → "\\b..." so json.loads yields the literal backslash.
+    result = _clean_model_json(r'{"regex_hints": [r"\b\d+\b"]}')
+    parsed = json.loads(result)
+    assert parsed["regex_hints"][0] == r"\b\d+\b"
+
+
+def test_clean_strips_line_comment_after_bracket():
+    raw = '{"a": [1, 2]} // a comment\n{"b": 3}'
+    result = _clean_model_json(raw)
+    assert "//" not in result
+
+
+def test_clean_strips_line_comment_after_string_value():
+    raw = '{"x": "hello"} // explanation\n'
+    result = _clean_model_json(raw)
+    assert "//" not in result
+    assert '"hello"' in result
+
+
+def test_clean_does_not_strip_url_slashes():
+    # // inside a URL string must not be touched.
+    raw = '{"url": "https://example.com/path"}'
+    result = _clean_model_json(raw)
+    assert "https://example.com/path" in result
+
+
+def test_clean_llama31_bulletin_output():
+    # Exact shape from the failing llama3.1:8b run.
+    raw = (
+        '{\n'
+        '  "goal_type": "document_link",\n'
+        '  "goal_type_confidence": 0.98,\n'
+        '  "synonyms": {"bulletin": ["update", "notice"]},\n'
+        '  "anchor_terms": ["bulletin"],\n'
+        '  "negative_terms": ["archive"],\n'
+        r'  "regex_hints": [r"\b[0-9]{1,2}[/-]\d{1,2}\b"],'
+        ' // match dates\n'
+        '  "description": "Find the latest bulletin."\n'
+        '}'
+    )
+    parsed = json.loads(_clean_model_json(raw))
+    assert parsed["synonyms"]["bulletin"] == ["update", "notice"]
+    # Regex hint has backslashes properly escaped — compiles as a valid pattern.
+    import re
+    assert re.compile(parsed["regex_hints"][0])
+
+
+# ---------------------------------------------------------------------------
 # _extract_json — JSON extraction strategies
 # ---------------------------------------------------------------------------
 
@@ -250,6 +303,28 @@ def test_hybrid_happy_path():
     assert "tutorial" in ctx.synonyms
     assert ctx.synonyms["tutorial"] == ["guide", "walkthrough", "introduction"]
     assert "tutorial" in ctx.anchor_terms
+
+
+@respx.mock
+def test_hybrid_accepts_raw_string_and_comment():
+    # Mirrors the failing llama3.1:8b bulletin output: r"..." and // comment.
+    raw_output = (
+        '{\n'
+        '  "goal_type": "navigation",\n'
+        '  "goal_type_confidence": 0.95,\n'
+        '  "synonyms": {"bulletin": ["update", "notice", "announcement"]},\n'
+        '  "anchor_terms": ["bulletin"],\n'
+        '  "negative_terms": ["archive", "old"],\n'
+        r'  "regex_hints": [r"\b\d{4}\b"],'
+        ' // match years\n'
+        '  "description": "Find the latest bulletin."\n'
+        '}'
+    )
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(raw_output))
+    ctx = HybridPreprocessor()("Find the latest bulletin", None, "en_US")
+    assert ctx.source == "model"
+    assert "bulletin" in ctx.synonyms
+    assert "update" in ctx.synonyms["bulletin"]
 
 
 @respx.mock
