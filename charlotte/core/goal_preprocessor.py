@@ -337,6 +337,10 @@ def _validate_hybrid_output(
 
     # §4.5.2 regex_hints — compile each; drop invalid (record in warnings)
     raw_regex = raw.get("regex_hints") or []
+    if isinstance(raw_regex, str):
+        # Model returned a bare string instead of a list — coerce and warn.
+        warnings.append("format_coerced: regex_hints was a string, wrapped in list")
+        raw_regex = [raw_regex]
     regex_hints: list[str] = []
     if isinstance(raw_regex, list):
         for pattern in raw_regex:

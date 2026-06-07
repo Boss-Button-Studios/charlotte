@@ -351,6 +351,20 @@ def test_hybrid_accepts_prose_wrapped_json():
 
 
 @respx.mock
+def test_hybrid_regex_hints_as_string_is_coerced():
+    # Mirrors llama3.1:8b second-run output: regex_hints is a bare string, not a list.
+    output = {
+        **_VALID_HYBRID_OUTPUT,
+        "regex_hints": r"(.*?bulletin|newsletter)[._\- ]*(?=[0-9])",
+    }
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(output)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert len(ctx.regex_hints) == 1
+    assert any("format_coerced" in w for w in ctx.validation_warnings)
+
+
+@respx.mock
 def test_hybrid_with_navigation_hint():
     respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(
         json.dumps(_VALID_HYBRID_OUTPUT)
