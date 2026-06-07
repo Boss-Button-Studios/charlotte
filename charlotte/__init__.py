@@ -8,6 +8,10 @@ streaming events are importable directly from this package:
 
 __version__ = "1.1.0"
 
+from charlotte.core.candidate_extractor import (
+    CandidateExtractorProtocol,
+    DefaultCandidateExtractor,
+)
 from charlotte.core.engine import crawl
 from charlotte.core.find_link import find_link
 from charlotte.core.goal_preprocessor import DeterministicPreprocessor, HybridPreprocessor
@@ -58,6 +62,9 @@ __all__ = [
     # Preprocessors
     "DeterministicPreprocessor",
     "HybridPreprocessor",
+    # Candidate extractor
+    "CandidateExtractorProtocol",
+    "DefaultCandidateExtractor",
     # Result types
     "CrawlResult",
     "GoalContext",
