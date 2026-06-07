@@ -298,3 +298,30 @@ def test_hybrid_custom_base_url():
 def test_hybrid_satisfies_protocol():
     from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
     assert isinstance(HybridPreprocessor(), GoalPreprocessorProtocol)
+
+
+@respx.mock
+def test_hybrid_falls_back_on_invalid_confidence():
+    bad = {**_VALID_HYBRID_OUTPUT, "goal_type_confidence": 1.5}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_falls_back_on_oversized_context():
+    bad = {**_VALID_HYBRID_OUTPUT, "description": "x" * 5000}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_anchor_terms_fallback_to_tokenized_goal():
+    # All model anchor_terms invalid → code falls back to deterministic tokens;
+    # source stays "model" because validation did not hard-reject.
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {}, "anchor_terms": ["not_in_goal"]}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert "python" in ctx.anchor_terms

@@ -360,7 +360,11 @@ class HybridPreprocessor:
             resp = client.post(f"{self._base_url}{_COMPLETIONS_PATH}", json=payload)
         resp.raise_for_status()
 
-        content = resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError(f"malformed completion response: {exc}") from exc
         content = _THINK_RE.sub("", content).strip()
         content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
         return _validate_hybrid_output(json.loads(content), goal, navigation_hint, locale,
