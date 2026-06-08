@@ -171,4 +171,5 @@ playwright/.auth/
 .claude/
 harness_logs/
 crawl_logs/
+logs/
 CLAUDE.md
