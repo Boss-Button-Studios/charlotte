@@ -129,6 +129,26 @@ def test_goal_type_freeform_fact_hours():
     assert ctx.goal_type == "freeform_fact"
 
 
+# Edge cases — substring collisions that word-boundary matching must not trigger.
+
+def test_goal_type_no_fee_inside_coffee():
+    # "coffee" contains "fee" but must not trigger price_extraction.
+    ctx = _PREPROCESSOR("Find the coffee menu", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
+def test_goal_type_no_published_inside_unpublished():
+    # "unpublished" contains "published" but must not trigger date_extraction.
+    ctx = _PREPROCESSOR("Find the unpublished draft", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
+def test_goal_type_no_hours_inside_behaviours():
+    # "behaviours" contains "hours" but must not trigger freeform_fact.
+    ctx = _PREPROCESSOR("Find the safety behaviours page", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
 # ---------------------------------------------------------------------------
 # Anchor terms
 # ---------------------------------------------------------------------------
