@@ -144,6 +144,19 @@ class DeterministicPreprocessor:
 # Matches reasoning-model think-blocks before the JSON answer.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+# Matches JSON wrapped in a markdown code fence (```json ... ``` or ``` ... ```).
+_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
+# Python raw-string literal: r"..." — some models write regex patterns this way.
+# \b ensures we only match a standalone r token (not the r at the end of a word
+# like "manager"), since r"..." is only valid Python syntax after non-word chars.
+_RAWSTR_RE = re.compile(r'\br"([^"]*)"')
+# JavaScript-style // comment at end of a JSON line.
+# Requires at least one space/tab before // so we don't match :// inside URLs.
+_JSON_COMMENT_RE = re.compile(r'(?<!:)[ \t]+//[^\n]*')
+# Python-style implicit string concatenation: "a"\n"b" → "a",\n"b".
+# JSON strings can't contain unescaped quotes, so this only fires between two
+# separate string literals that are missing a comma separator.
+_ADJACENT_STRINGS_RE = re.compile(r'"(\s+)"')
 # ANSI escape sequences and non-printable ASCII control chars (§4.5.4).
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]")
 
@@ -157,21 +170,108 @@ _GOAL_TYPES: frozenset[str] = frozenset({
 })
 
 _HYBRID_SYSTEM = """\
-You are a goal-context analyzer for a web crawler. Given a navigation or \
-information-extraction goal, return JSON context to guide the crawl.
+You are a web-crawl goal analyzer. For each goal, produce JSON that helps a \
+web crawler find the right page faster.
+
+Your primary job is to expand the goal with SYNONYMS and NEGATIVE TERMS. \
+This is the main value you add beyond simple keyword matching — do not leave \
+synonyms empty for any meaningful goal.
 
 JSON fields:
-  "goal_type"            — one of: navigation, phone_extraction, date_extraction, \
-address_extraction, price_extraction, document_link, freeform_fact
-  "goal_type_confidence" — float 0.0-1.0
-  "synonyms"             — object mapping key terms (verbatim in goal text) to \
-lists of alternative phrasings; keys MUST appear in the goal
-  "anchor_terms"         — array of key tokens or short phrases from the goal
-  "negative_terms"       — array of terms indicating the wrong page; MUST NOT \
-appear in the goal and MUST NOT overlap synonyms or anchor_terms
-  "regex_hints"          — array of valid Python regex patterns for extracting the \
-answer (fact goals only); empty for navigation goals
-  "description"          — one-sentence interpretation of the goal"""
+  "goal_type"            — one of: navigation, phone_extraction, date_extraction,
+                           address_extraction, price_extraction, document_link,
+                           freeform_fact
+  "goal_type_confidence" — float 0.0–1.0
+  "synonyms"             — object mapping each key term (verbatim in goal) to a
+                           list of alternative phrasings a website might use.
+                           Keys MUST appear in the goal. Do NOT leave this empty.
+  "anchor_terms"         — the most discriminating tokens from the goal (skip
+                           generic words like "find", "the", "page")
+  "negative_terms"       — terms that indicate the WRONG page. MUST NOT appear
+                           in the goal and MUST NOT overlap synonyms or anchor_terms.
+  "regex_hints"          — valid Python regex patterns (fact goals only); [] for
+                           navigation goals
+  "description"          — one plain-English sentence describing what to find
+
+Example input:  "Find the contact page"
+Example output:
+{
+  "goal_type": "navigation",
+  "goal_type_confidence": 0.95,
+  "synonyms": {
+    "contact": ["contact us", "get in touch", "reach us", "contact information",
+                "email us", "connect with us"]
+  },
+  "anchor_terms": ["contact"],
+  "negative_terms": ["home", "about", "careers", "sitemap", "login", "news"],
+  "regex_hints": [],
+  "description": "Find the page where visitors can contact the organization."
+}
+
+Respond with JSON only — no explanation text, no code fences, no markdown."""
+
+
+def _clean_model_json(content: str) -> str:
+    """Strip model-specific syntax that makes otherwise-valid JSON unparseable.
+
+    Handles three patterns observed in llama3.1 / codellama output:
+      - Python raw-string literals: ``r"\\b..."`` → ``"\\\\b..."``
+        (backslashes are double-escaped so they survive json.loads as literals)
+      - JavaScript ``//`` end-of-line comments (e.g. after a closing ``]``)
+        Requires at least one space/tab before ``//`` so ``://`` inside URLs
+        is never touched.
+      - Python-style implicit string concatenation: ``"a"\\n"b"`` → ``"a",\\n"b"``
+        (missing comma between adjacent string literals in an array)
+    """
+    def _fix_raw(m: re.Match) -> str:
+        return '"' + m.group(1).replace("\\", "\\\\") + '"'
+
+    content = _RAWSTR_RE.sub(_fix_raw, content)
+    content = _JSON_COMMENT_RE.sub("", content)
+    content = _ADJACENT_STRINGS_RE.sub('",\n"', content)
+    return content
+
+
+def _extract_json(content: str) -> dict:
+    """Extract a JSON object from model output using three fallback strategies.
+
+    Applies _clean_model_json first, then tries strategies in order:
+      1. Entire content is valid JSON.
+      2. JSON inside a markdown code fence (``` or ```json).
+      3. First ``{`` in the content — parse forward using raw_decode so trailing
+         prose after the closing ``}`` is silently ignored.
+
+    Raises ValueError if no parseable JSON object is found.
+    """
+    content = _clean_model_json(content)
+
+    # Strategy 1: clean JSON
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: inside a code fence
+    fence = _FENCE_RE.search(content)
+    if fence:
+        try:
+            result = json.loads(fence.group(1).strip())
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: first { … } object, ignoring surrounding prose
+    start = content.find("{")
+    if start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(content, start)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError("no parseable JSON object found in model output")
 
 
 def _validate_hybrid_output(
@@ -245,6 +345,10 @@ def _validate_hybrid_output(
 
     # §4.5.2 regex_hints — compile each; drop invalid (record in warnings)
     raw_regex = raw.get("regex_hints") or []
+    if isinstance(raw_regex, str):
+        # Model returned a bare string instead of a list — coerce and warn.
+        warnings.append("format_coerced: regex_hints was a string, wrapped in list")
+        raw_regex = [raw_regex]
     regex_hints: list[str] = []
     if isinstance(raw_regex, list):
         for pattern in raw_regex:
@@ -371,7 +475,7 @@ class HybridPreprocessor:
             raise ValueError(f"malformed completion response: {exc}") from exc
         content = _THINK_RE.sub("", content).strip()
         content = _LONE_CLOSE_THINK_RE.sub("", content).strip()
-        return _validate_hybrid_output(json.loads(content), goal, navigation_hint, locale,
+        return _validate_hybrid_output(_extract_json(content), goal, navigation_hint, locale,
                                        self._model)
 
 

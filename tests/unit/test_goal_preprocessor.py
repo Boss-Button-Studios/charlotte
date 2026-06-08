@@ -10,6 +10,8 @@ from charlotte.core.goal_preprocessor import (
     DeterministicPreprocessor,
     HybridPreprocessor,
     InMemoryGoalContextCache,
+    _clean_model_json,
+    _extract_json,
 )
 from charlotte.models import CACHE_FORMAT_VERSION, GoalContext
 
@@ -164,6 +166,142 @@ def test_cache_format_version_in_key():
 
 
 # ---------------------------------------------------------------------------
+# _clean_model_json — pre-parse cleanup
+# ---------------------------------------------------------------------------
+
+def test_clean_strips_raw_string_prefix():
+    # r"\b..." → "\\b..." so json.loads yields the literal backslash.
+    result = _clean_model_json(r'{"regex_hints": [r"\b\d+\b"]}')
+    parsed = json.loads(result)
+    assert parsed["regex_hints"][0] == r"\b\d+\b"
+
+
+def test_clean_strips_line_comment_after_bracket():
+    raw = '{"a": [1, 2]} // a comment\n{"b": 3}'
+    result = _clean_model_json(raw)
+    assert "//" not in result
+
+
+def test_clean_strips_line_comment_after_string_value():
+    raw = '{"x": "hello"} // explanation\n'
+    result = _clean_model_json(raw)
+    assert "//" not in result
+    assert '"hello"' in result
+
+
+def test_clean_does_not_strip_url_slashes():
+    # // inside a URL string must not be touched.
+    raw = '{"url": "https://example.com/path"}'
+    result = _clean_model_json(raw)
+    assert "https://example.com/path" in result
+
+
+def test_clean_inserts_comma_between_adjacent_strings():
+    # Python implicit string concatenation: "a"\n"b" → "a",\n"b"
+    raw = '{"synonyms": {"x": ["foo"\n                     "bar"]}}'
+    parsed = json.loads(_clean_model_json(raw))
+    assert parsed["synonyms"]["x"] == ["foo", "bar"]
+
+
+def test_clean_llama31_bulletin_output():
+    # Exact shape from the failing llama3.1:8b run.
+    raw = (
+        '{\n'
+        '  "goal_type": "document_link",\n'
+        '  "goal_type_confidence": 0.98,\n'
+        '  "synonyms": {"bulletin": ["update", "notice"]},\n'
+        '  "anchor_terms": ["bulletin"],\n'
+        '  "negative_terms": ["archive"],\n'
+        r'  "regex_hints": [r"\b[0-9]{1,2}[/-]\d{1,2}\b"],'
+        ' // match dates\n'
+        '  "description": "Find the latest bulletin."\n'
+        '}'
+    )
+    parsed = json.loads(_clean_model_json(raw))
+    assert parsed["synonyms"]["bulletin"] == ["update", "notice"]
+    # Regex hint has backslashes properly escaped — compiles as a valid pattern.
+    import re
+    assert re.compile(parsed["regex_hints"][0])
+
+
+def test_clean_llama31_phone_manager_output():
+    # Exact shape from the failing llama3.1:8b run: raw strings + missing comma.
+    raw = (
+        '{\n'
+        '  "goal_type": "phone_extraction",\n'
+        '  "goal_type_confidence": 0.95,\n'
+        '  "synonyms": {\n'
+        '    "assistant manager": ["shop supervisor", "store manager"],\n'
+        '    "phone number": ["phonenumber", "phone contact"\n'
+        '                     "contact info"]\n'
+        '  },\n'
+        '  "anchor_terms": ["assistant manager", "phone number"],\n'
+        '  "negative_terms": ["customer service"],\n'
+        r'  "regex_hints": [r"\d{3}-\d{3}-\d{4}"],'
+        '\n'
+        '  "description": "Find the phone number of an assistant manager."\n'
+        '}'
+    )
+    parsed = json.loads(_clean_model_json(raw))
+    assert "contact info" in parsed["synonyms"]["phone number"]
+    import re
+    assert re.compile(parsed["regex_hints"][0])
+
+
+# ---------------------------------------------------------------------------
+# _extract_json — JSON extraction strategies
+# ---------------------------------------------------------------------------
+
+def test_extract_json_clean():
+    assert _extract_json('{"a": 1}') == {"a": 1}
+
+
+def test_extract_json_fence_json_tag():
+    content = '```json\n{"a": 1}\n```'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_fence_no_tag():
+    content = '```\n{"a": 1}\n```'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_prose_then_fence():
+    # Mirrors llama3.1 output: explanation text followed by fenced JSON.
+    content = (
+        "Here is the JSON context:\n\n"
+        "```json\n{\"goal_type\": \"navigation\"}\n```\n\n"
+        "Let me explain…"
+    )
+    result = _extract_json(content)
+    assert result["goal_type"] == "navigation"
+
+
+def test_extract_json_prose_surrounding_object():
+    # JSON embedded in prose without a code fence.
+    content = 'Sure! Here you go: {"goal_type": "navigation"} Hope that helps.'
+    assert _extract_json(content)["goal_type"] == "navigation"
+
+
+def test_extract_json_trailing_prose_after_object():
+    # raw_decode must stop at } and not fail on trailing text.
+    content = '{"a": 1} some trailing explanation'
+    assert _extract_json(content) == {"a": 1}
+
+
+def test_extract_json_raises_when_no_json():
+    import pytest
+    with pytest.raises(ValueError, match="no parseable JSON"):
+        _extract_json("No JSON here at all.")
+
+
+def test_extract_json_invalid_fence_content_falls_to_strategy3():
+    # Fence contains non-JSON; strategy 3 should still find the object.
+    content = "```\nnot json\n```\n{\"a\": 2}"
+    assert _extract_json(content) == {"a": 2}
+
+
+# ---------------------------------------------------------------------------
 # HybridPreprocessor
 # ---------------------------------------------------------------------------
 
@@ -196,6 +334,65 @@ def test_hybrid_happy_path():
     assert "tutorial" in ctx.synonyms
     assert ctx.synonyms["tutorial"] == ["guide", "walkthrough", "introduction"]
     assert "tutorial" in ctx.anchor_terms
+
+
+@respx.mock
+def test_hybrid_accepts_raw_string_and_comment():
+    # Mirrors the failing llama3.1:8b bulletin output: r"..." and // comment.
+    raw_output = (
+        '{\n'
+        '  "goal_type": "navigation",\n'
+        '  "goal_type_confidence": 0.95,\n'
+        '  "synonyms": {"bulletin": ["update", "notice", "announcement"]},\n'
+        '  "anchor_terms": ["bulletin"],\n'
+        '  "negative_terms": ["archive", "old"],\n'
+        r'  "regex_hints": [r"\b\d{4}\b"],'
+        ' // match years\n'
+        '  "description": "Find the latest bulletin."\n'
+        '}'
+    )
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(raw_output))
+    ctx = HybridPreprocessor()("Find the latest bulletin", None, "en_US")
+    assert ctx.source == "model"
+    assert "bulletin" in ctx.synonyms
+    assert "update" in ctx.synonyms["bulletin"]
+
+
+@respx.mock
+def test_hybrid_accepts_fenced_json():
+    # Mirrors llama3.1:8b output — JSON wrapped in a code fence with surrounding prose.
+    fenced = (
+        "Here is the JSON context:\n\n"
+        f"```json\n{json.dumps(_VALID_HYBRID_OUTPUT)}\n```\n\n"
+        "Let me explain how I generated this JSON: …"
+    )
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(fenced))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert ctx.goal_type == "navigation"
+
+
+@respx.mock
+def test_hybrid_accepts_prose_wrapped_json():
+    # JSON embedded in prose without a fence — strategy 3.
+    wrapped = f"Sure, here you go: {json.dumps(_VALID_HYBRID_OUTPUT)} Hope that helps!"
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(wrapped))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+
+
+@respx.mock
+def test_hybrid_regex_hints_as_string_is_coerced():
+    # Mirrors llama3.1:8b second-run output: regex_hints is a bare string, not a list.
+    output = {
+        **_VALID_HYBRID_OUTPUT,
+        "regex_hints": r"(.*?bulletin|newsletter)[._\- ]*(?=[0-9])",
+    }
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(output)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "model"
+    assert len(ctx.regex_hints) == 1
+    assert any("format_coerced" in w for w in ctx.validation_warnings)
 
 
 @respx.mock
