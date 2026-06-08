@@ -41,11 +41,22 @@ from charlotte.models import GoalContext
 BASE_URL = os.environ.get("CHARLOTTE_LOCAL_BASE_URL", "http://localhost:11434")
 MODEL    = os.environ.get("CHARLOTTE_LOCAL_MODEL",    "deepseek-r1:14b")
 _env_to  = os.environ.get("CHARLOTTE_MODEL_TIMEOUT")
-TIMEOUT  = float(_env_to) if _env_to else None
+try:
+    TIMEOUT = float(_env_to) if _env_to else None
+except ValueError:
+    raise ValueError(
+        f"CHARLOTTE_MODEL_TIMEOUT must be a number, got {_env_to!r}"
+    ) from None
 
 # ---------------------------------------------------------------------------
 # Goal list
 # ---------------------------------------------------------------------------
+
+_VALID_GOAL_TYPES: frozenset[str] = frozenset({
+    "navigation", "phone_extraction", "date_extraction", "address_extraction",
+    "price_extraction", "document_link", "freeform_fact",
+})
+
 
 @dataclass(frozen=True)
 class GoalSpec:
@@ -53,6 +64,10 @@ class GoalSpec:
     goal:          str
     hint:          str | None
     notes:         str          # why this case is interesting
+
+    def __post_init__(self) -> None:
+        if self.expected_type not in _VALID_GOAL_TYPES:
+            raise ValueError(f"invalid expected_type {self.expected_type!r} in GoalSpec")
 
 
 GOALS: list[GoalSpec] = [
@@ -237,4 +252,5 @@ def main() -> None:
     print(f"\nLog written to: {args.output}", file=sys.stderr)
 
 
-main()
+if __name__ == "__main__":
+    main()
