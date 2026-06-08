@@ -43,7 +43,12 @@ from charlotte.models import Candidate, GoalContext
 BASE_URL = os.environ.get("CHARLOTTE_LOCAL_BASE_URL", "http://localhost:11434")
 MODEL = os.environ.get("CHARLOTTE_LOCAL_MODEL", "deepseek-r1:14b")
 _timeout_env = os.environ.get("CHARLOTTE_MODEL_TIMEOUT")
-TIMEOUT = float(_timeout_env) if _timeout_env else None
+try:
+    TIMEOUT = float(_timeout_env) if _timeout_env else None
+except ValueError:
+    raise ValueError(
+        f"CHARLOTTE_MODEL_TIMEOUT must be a number, got {_timeout_env!r}"
+    ) from None
 
 # ---------------------------------------------------------------------------
 # Display
@@ -126,9 +131,18 @@ async def run(args: argparse.Namespace) -> None:
     ctx: GoalContext = preprocessor(goal, args.hint, locale)
     prep_ms = int((monotonic() - t0) * 1000)
 
-    if args.goal_type and args.goal_type != ctx.goal_type:
-        ctx = dataclasses.replace(ctx, goal_type=args.goal_type)  # type: ignore[arg-type]
-        print(f"  (goal_type overridden → {args.goal_type})")
+    _VALID_GOAL_TYPES = {
+        "navigation", "phone_extraction", "date_extraction", "address_extraction",
+        "price_extraction", "document_link", "freeform_fact",
+    }
+    if args.goal_type:
+        if args.goal_type not in _VALID_GOAL_TYPES:
+            print(f"\n  ✗ Unknown --goal-type {args.goal_type!r}. "
+                  f"Valid types: {', '.join(sorted(_VALID_GOAL_TYPES))}")
+            return
+        if args.goal_type != ctx.goal_type:
+            ctx = dataclasses.replace(ctx, goal_type=args.goal_type)  # type: ignore[arg-type]
+            print(f"  (goal_type overridden → {args.goal_type})")
 
     print_context(ctx, prep_ms)
 
@@ -205,7 +219,10 @@ def main() -> None:
                         default="deterministic",
                         help="Preprocessor to use (default: deterministic)")
     args = parser.parse_args()
+    if args.top < 1:
+        parser.error("--top must be a positive integer")
     asyncio.run(run(args))
 
 
-main()
+if __name__ == "__main__":
+    main()
