@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 from pathlib import Path
 from time import monotonic
 
@@ -45,9 +46,8 @@ _timeout_env = os.environ.get("CHARLOTTE_MODEL_TIMEOUT")
 try:
     TIMEOUT = float(_timeout_env) if _timeout_env else None
 except ValueError:
-    raise ValueError(
-        f"CHARLOTTE_MODEL_TIMEOUT must be a number, got {_timeout_env!r}"
-    ) from None
+    print(f"Error: CHARLOTTE_MODEL_TIMEOUT must be a number, got {_timeout_env!r}", file=sys.stderr)
+    sys.exit(1)
 
 _BAR = "─" * 60
 
@@ -133,19 +133,23 @@ async def run(
     hint: str | None,
     locale: str,
 ) -> None:
-    # Build GoalContext
-    t0 = monotonic()
-    if preprocessor == "hybrid":
-        print(f"\nBuilding GoalContext via HybridPreprocessor  model={MODEL}  base_url={BASE_URL}")
-        ctx = HybridPreprocessor(base_url=BASE_URL, model=MODEL, timeout=TIMEOUT)(
-            goal, hint, locale
-        )
-    else:
-        ctx = DeterministicPreprocessor()(goal, hint, locale)
-    ctx_ms = int((monotonic() - t0) * 1000)
+    try:
+        t0 = monotonic()
+        if preprocessor == "hybrid":
+            print(f"\nBuilding GoalContext via HybridPreprocessor  model={MODEL}  base_url={BASE_URL}")
+            ctx = HybridPreprocessor(base_url=BASE_URL, model=MODEL, timeout=TIMEOUT)(
+                goal, hint, locale
+            )
+        else:
+            ctx = DeterministicPreprocessor()(goal, hint, locale)
+        ctx_ms = int((monotonic() - t0) * 1000)
+    except Exception as exc:
+        print(f"\n  ✗ Could not build GoalContext: {type(exc).__name__}: {exc}")
+        if preprocessor == "hybrid":
+            print(f"    Is {BASE_URL} reachable? Try --preprocessor deterministic.")
+        return
     print_context(ctx, ctx_ms)
 
-    # Build verifier
     verifier = DefaultDestinationVerifier(
         mode=mode,
         verify_threshold=threshold,
@@ -158,9 +162,13 @@ async def run(
     if result_to_file:
         print(f"  result_to_file={result_to_file}")
 
-    t0 = monotonic()
-    result, content = await verifier(url=url, goal_context=ctx)
-    verify_ms = int((monotonic() - t0) * 1000)
+    try:
+        t0 = monotonic()
+        result, content = await verifier(url=url, goal_context=ctx)
+        verify_ms = int((monotonic() - t0) * 1000)
+    except Exception as exc:
+        print(f"\n  ✗ Unexpected verifier error: {type(exc).__name__}: {exc}")
+        return
     print_result(result, content, verify_ms)
 
 
