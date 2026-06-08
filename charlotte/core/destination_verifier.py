@@ -162,7 +162,6 @@ def _embedding_score(
 
     Truncates text to 2048 chars so encoding stays fast on small hardware.
     """
-    import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
 
     query = " ".join(anchor_terms + synonym_values).strip()
@@ -440,7 +439,10 @@ class DefaultDestinationVerifier:
         content: bytes | None = body
 
         if self._result_to_file is not None:
-            filename = suggested_filename or "result"
+            # Sanitize to basename — Content-Disposition and URL paths are
+            # attacker-controlled; strip parent components to prevent traversal.
+            raw_name = Path(suggested_filename or "result").name
+            filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
             file_path = self._result_to_file / filename
             file_path.write_bytes(body)
             content = None

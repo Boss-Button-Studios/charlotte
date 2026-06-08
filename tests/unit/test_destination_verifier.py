@@ -341,12 +341,18 @@ async def test_relevance_binary_content_skips_text_scoring():
 @respx.mock
 @pytest.mark.asyncio
 async def test_full_mode_without_embeddings_raises_threshold(monkeypatch):
-    """Without sentence-transformers, full mode uses BM25 with threshold + 0.15."""
+    """Without sentence-transformers, full mode uses BM25 with threshold + 0.15.
+
+    BM25 is patched to return 0.1 so the effective threshold of 0.15 (0.0 + 0.15)
+    predictably causes a failure regardless of page content.
+    """
+    import charlotte.core.destination_verifier as _dv_mod
+
     respx.get(_URL).mock(
         return_value=httpx.Response(200, content=_RELEVANT_HTML,
                                     headers={"content-type": "text/html; charset=utf-8"})
     )
-    # Make sentence_transformers unavailable
+    # Make sentence_transformers unavailable so the BM25 fallback path is taken.
     import builtins
     real_import = builtins.__import__
 
@@ -356,13 +362,13 @@ async def test_full_mode_without_embeddings_raises_threshold(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _no_st)
+    # Fix BM25 score to 0.1 — below the raised threshold of 0.15 (0.0 + 0.15).
+    monkeypatch.setattr(_dv_mod, "_bm25_score", lambda *_a, **_kw: 0.1)
 
-    # threshold=0.0 → raised to 0.15 for full mode; still passes if score > 0
     v = _verifier(mode="full", verify_threshold=0.0)
     result, _ = await v(url=_URL, goal_context=_ctx(anchor_terms=["contact"]))
-    # The test simply asserts the verifier runs without error; pass/fail
-    # depends on the actual BM25 score being > 0.15.
-    assert isinstance(result, VerificationResult)
+    assert result.passed is False
+    assert "below_threshold" in result.reason
 
 
 # ---------------------------------------------------------------------------
