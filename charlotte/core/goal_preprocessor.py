@@ -67,25 +67,42 @@ _GOAL_TYPE_RULES: list[tuple[str, GoalType]] = [
     ("phone number", "phone_extraction"),
     ("phone #", "phone_extraction"),
     ("how much", "price_extraction"),
+    ("when was", "date_extraction"),
+    ("when is", "date_extraction"),
     ("download the", "document_link"),
     ("download a", "document_link"),
     # Single-word triggers
     ("phone", "phone_extraction"),
     ("address", "address_extraction"),
     ("price", "price_extraction"),
+    ("pricing", "price_extraction"),
+    ("fee", "price_extraction"),
     ("cost", "price_extraction"),
     ("date", "date_extraction"),
+    ("published", "date_extraction"),
     ("schedule", "date_extraction"),
     ("pdf", "document_link"),
+    ("bulletin", "document_link"),
+    ("handbook", "document_link"),
     (".doc", "document_link"),
     (".xlsx", "document_link"),
     (".csv", "document_link"),
+    ("hours", "freeform_fact"),
 ]
 
 
 def _detect_goal_type(goal_normalized: str) -> GoalType:
     for keyword, goal_type in _GOAL_TYPE_RULES:
-        if keyword in goal_normalized:
+        if " " in keyword or keyword.startswith("."):
+            # Multi-word and extension patterns are specific enough for plain substring.
+            if keyword in goal_normalized:
+                return goal_type
+        elif re.search(
+            r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])",
+            goal_normalized,
+        ):
+            # Single-token trigger: require token boundaries to avoid e.g.
+            # "coffee" → fee, "unpublished" → published.
             return goal_type
     return "navigation"
 

@@ -89,6 +89,66 @@ def test_goal_type_navigation_not_confused_by_downloads_page():
     assert ctx.goal_type == "navigation"
 
 
+def test_goal_type_price_extraction_fee():
+    ctx = _PREPROCESSOR("What is the membership fee?", None, "en_US")
+    assert ctx.goal_type == "price_extraction"
+
+
+def test_goal_type_price_extraction_pricing():
+    ctx = _PREPROCESSOR("Find the subscription pricing", None, "en_US")
+    assert ctx.goal_type == "price_extraction"
+
+
+def test_goal_type_date_extraction_when_was():
+    ctx = _PREPROCESSOR("When was this article published?", None, "en_US")
+    assert ctx.goal_type == "date_extraction"
+
+
+def test_goal_type_date_extraction_when_is():
+    ctx = _PREPROCESSOR("When is the next board meeting?", None, "en_US")
+    assert ctx.goal_type == "date_extraction"
+
+
+def test_goal_type_date_extraction_published():
+    ctx = _PREPROCESSOR("Find the date this document was published", None, "en_US")
+    assert ctx.goal_type == "date_extraction"
+
+
+def test_goal_type_document_link_bulletin():
+    ctx = _PREPROCESSOR("Find the latest bulletin", None, "en_US")
+    assert ctx.goal_type == "document_link"
+
+
+def test_goal_type_document_link_handbook():
+    ctx = _PREPROCESSOR("Get the employee handbook", None, "en_US")
+    assert ctx.goal_type == "document_link"
+
+
+def test_goal_type_freeform_fact_hours():
+    ctx = _PREPROCESSOR("What are the business hours?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+# Edge cases — substring collisions that word-boundary matching must not trigger.
+
+def test_goal_type_no_fee_inside_coffee():
+    # "coffee" contains "fee" but must not trigger price_extraction.
+    ctx = _PREPROCESSOR("Find the coffee menu", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
+def test_goal_type_no_published_inside_unpublished():
+    # "unpublished" contains "published" but must not trigger date_extraction.
+    ctx = _PREPROCESSOR("Find the unpublished draft", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
+def test_goal_type_no_hours_inside_behaviours():
+    # "behaviours" contains "hours" but must not trigger freeform_fact.
+    ctx = _PREPROCESSOR("Find the safety behaviours page", None, "en_US")
+    assert ctx.goal_type == "navigation"
+
+
 # ---------------------------------------------------------------------------
 # Anchor terms
 # ---------------------------------------------------------------------------
