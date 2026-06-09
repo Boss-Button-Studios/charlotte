@@ -50,6 +50,14 @@ _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORE
 # US phone number formats: 858-966-5846, (858) 966-5846, 858.966.5846, 858 966 5846
 _PHONE_RE = re.compile(r'\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}')
 
+# Markdown JSON fence: ```json { ... } ``` or ``` { ... } ```
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+# Ollama's default num_ctx is 2048–4096 depending on the model load.  Prompts
+# that exceed it return HTTP 400.  Pages with full text (up to 16 KB) plus link
+# lists can reach ~5 000 tokens; 8 192 accommodates that with headroom.
+_OLLAMA_NUM_CTX = 8192
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "deepseek-r1:14b"
 _COMPLETIONS_PATH = "/v1/chat/completions"
@@ -143,6 +151,17 @@ def _build_user_prompt(
     parts.append(f"Reminder — your goal is: {goal}")
     parts.append("Evaluate whether this page satisfies that goal, then decide which links to follow next.")
 
+    parts.append("")
+    parts.append(
+        "IMPORTANT: Your entire response must be a single JSON object with no surrounding text or markdown. "
+        "Do not include code fences, explanations, or any prose. Example:"
+    )
+    parts.append(
+        '{"found": false, "confidence": 0.1, "result_url": null, '
+        '"links_to_follow": ["https://example.com/next"], '
+        '"reasoning": "Not found here; following relevant link.", "answer": null}'
+    )
+
     return "\n".join(parts)
 
 
@@ -165,6 +184,33 @@ def _rescue_answer_from_reasoning(data: dict) -> dict:
 def _strip_think_tags(raw: str) -> str:
     content = _THINK_TAG_RE.sub("", raw)
     return _LONE_CLOSE_THINK_RE.sub("", content).strip()
+
+
+def _parse_model_json(raw: str) -> dict:
+    """Parse model output to a dict, tolerating think tags and markdown code fences.
+
+    deepseek-r1 and similar reasoning models sometimes wrap their JSON answer in
+    a markdown code fence (```json { ... } ```) rather than returning raw JSON.
+    This function strips think-tag reasoning blocks first, then tries three
+    extraction strategies in order: direct parse, markdown-fence extraction, and
+    outermost-brace extraction.
+    """
+    stripped = _strip_think_tags(raw)
+    # Strategy 1: direct parse (clean output, most models)
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    # Strategy 2: extract from markdown code fence
+    m = _JSON_FENCE_RE.search(stripped)
+    if m:
+        return json.loads(m.group(1))
+    # Strategy 3: find outermost { ... } block in free-form text
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        return json.loads(stripped[start : end + 1])
+    raise json.JSONDecodeError("no JSON object found", stripped, 0)
 
 
 class LocalAdapter:
@@ -272,6 +318,7 @@ class LocalAdapter:
             ],
             "response_format": {"type": "json_object"},
             "stream": False,
+            "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
 
         try:
@@ -295,7 +342,7 @@ class LocalAdapter:
         try:
             data = response.json()
             raw_content = data["choices"][0]["message"]["content"] or ""
-            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+            return _rescue_answer_from_reasoning(_parse_model_json(raw_content))
         except json.JSONDecodeError:
             logger.debug("Local model response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None
@@ -313,6 +360,7 @@ class LocalAdapter:
             ],
             "response_format": {"type": "json_object"},
             "stream": True,
+            "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
 
         parts: list[str] = []
@@ -358,7 +406,7 @@ class LocalAdapter:
 
         raw_content = "".join(parts)
         try:
-            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+            return _rescue_answer_from_reasoning(_parse_model_json(raw_content))
         except json.JSONDecodeError:
             logger.debug("Local model streaming response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None
