@@ -30,7 +30,6 @@ from charlotte.core.goal_preprocessor import (
     DeterministicPreprocessor,
     HybridPreprocessor,
     _COMPLETIONS_PATH,
-    _CTRL_RE,
     _HYBRID_SYSTEM,
     _LONE_CLOSE_THINK_RE,
     _THINK_RE,

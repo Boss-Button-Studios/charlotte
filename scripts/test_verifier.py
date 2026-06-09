@@ -98,7 +98,7 @@ def print_result(result, content: ResultContent | None, elapsed_ms: int) -> None
     print(f"  reason   {result.reason}")
 
     if content is not None:
-        print(f"\n  ResultContent:")
+        print("\n  ResultContent:")
         print(f"    content_type      {content.content_type or '(none)'}")
         print(f"    content_length    {content.content_length:,} bytes")
         print(f"    suggested_file    {content.suggested_filename or '(none)'}")
@@ -114,7 +114,7 @@ def print_result(result, content: ResultContent | None, elapsed_ms: int) -> None
                 preview_str = repr(preview)
             print(f"    content[0:80]     {preview_str!r}")
     else:
-        print(f"\n  ResultContent: (not captured)")
+        print("\n  ResultContent: (not captured)")
 
 
 # ---------------------------------------------------------------------------

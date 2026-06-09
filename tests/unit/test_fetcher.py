@@ -5,7 +5,7 @@ Covers T-15 through T-20 from the test matrix, plus unit tests for each
 component of the timeout policy, redirect policy, and Playwright stub.
 """
 
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest

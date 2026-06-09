@@ -10,13 +10,12 @@ T-04  Goal not found within max_depth (depth limit)
 from __future__ import annotations
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl
-from charlotte.models import BudgetExhausted, CrawlResult, ResultFound
+from charlotte.models import BudgetExhausted, CrawlResult
 
-from tests.integration.conftest import BODY, collect, nav, page, seq
+from tests.integration.conftest import collect, nav, page, seq
 
 _BASE = "http://example.com"
 _START = f"{_BASE}/"
@@ -36,6 +35,7 @@ async def test_t01_goal_found_on_first_page():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert isinstance(result, CrawlResult)
@@ -65,6 +65,7 @@ async def test_t02_goal_found_after_one_hop():
     result = await crawl(
         _START, _GOAL,
         model=model, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

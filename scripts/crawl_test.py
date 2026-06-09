@@ -196,7 +196,7 @@ async def main() -> None:
             if event.answer is not None:
                 print(f"            answer: {event.answer}")
             else:
-                print(f"            answer: (none)")
+                print("            answer: (none)")
             log["events"].append({
                 "type": "ResultFound",
                 "elapsed_ms": elapsed_ms,

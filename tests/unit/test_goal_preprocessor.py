@@ -13,7 +13,7 @@ from charlotte.core.goal_preprocessor import (
     _clean_model_json,
     _extract_json,
 )
-from charlotte.models import CACHE_FORMAT_VERSION, GoalContext
+from charlotte.models import GoalContext
 
 
 _PREPROCESSOR = DeterministicPreprocessor()
@@ -219,7 +219,7 @@ def test_cache_format_version_in_key():
         m.CACHE_FORMAT_VERSION = original + 1  # type: ignore[assignment]
         # New version should be a cache miss.
         assert len(cache._store) == 1  # only the old entry
-        ctx_new = cache.get_or_create("Find contact", None, "en_US", p)
+        cache.get_or_create("Find contact", None, "en_US", p)
         assert len(cache._store) == 2  # old + new
     finally:
         m.CACHE_FORMAT_VERSION = original  # type: ignore[assignment]
@@ -350,7 +350,6 @@ def test_extract_json_trailing_prose_after_object():
 
 
 def test_extract_json_raises_when_no_json():
-    import pytest
     with pytest.raises(ValueError, match="no parseable JSON"):
         _extract_json("No JSON here at all.")
 

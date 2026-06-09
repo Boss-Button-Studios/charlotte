@@ -183,7 +183,7 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
     hyb = HybridPreprocessor(base_url=BASE_URL, model=MODEL, timeout=TIMEOUT) \
           if not args.deterministic_only else None
 
-    out.write(f"Charlotte preprocessor brainstorm\n")
+    out.write("Charlotte preprocessor brainstorm\n")
     out.write(f"Generated: {datetime.now(timezone.utc).isoformat()}\n")
     out.write(f"Model:     {MODEL}  base_url={BASE_URL}\n")
     out.write(f"Goals:     {len(GOALS)}\n")

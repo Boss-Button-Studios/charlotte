@@ -40,6 +40,7 @@ async def test_t31_factual_answer_returned_in_result_and_event():
             answer=_PHONE,
         )),
         stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert isinstance(result, CrawlResult)
@@ -59,6 +60,7 @@ async def test_t31_answer_in_result_found_event():
             answer=_PHONE,
         )),
         stream=True, respect_robots=False, default_delay=0,
+        verify_destination="off",
     ))
 
     result_events = [e for e in events if isinstance(e, ResultFound)]
@@ -82,6 +84,7 @@ async def test_t32_navigation_goal_answer_is_none():
             answer=None,
         )),
         stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found
@@ -98,6 +101,7 @@ async def test_t32_absent_answer_field_treated_as_none():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

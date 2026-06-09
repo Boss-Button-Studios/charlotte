@@ -16,7 +16,6 @@ from charlotte.core.candidate_extractor import (
     FreeformFactExtractor,
     PhoneNumberExtractor,
     PriceExtractor,
-    _build_candidate,
     _estimate_zone,
     _format_quality,
     _nearest_distance,

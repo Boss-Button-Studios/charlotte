@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from charlotte.core.find_link import _to_link_result, find_link
 from charlotte.exceptions import CharlotteConfigError
-from charlotte.models import CrawlResult, LinkResult, VisitLogEntry
+from charlotte.models import CrawlResult, LinkResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -245,6 +245,7 @@ async def test_find_link_result_found():
         stream=False,
         respect_robots=True,
         default_delay=0.0,
+        verify_destination="off",
     )
 
     assert isinstance(result, LinkResult)
@@ -291,6 +292,7 @@ async def test_find_link_collects_multiple_results():
         stream=False,
         respect_robots=True,
         default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True

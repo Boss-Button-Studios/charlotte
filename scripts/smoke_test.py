@@ -57,7 +57,7 @@ async def main() -> None:
     fetcher = PageFetcher(allowed_domains=allowed, polite_delay=0.0)
     t0 = monotonic()
     page = await fetcher.fetch(URL, visited_urls=set())
-    hostname = urlsplit(page.url).hostname or base_hostname  # follow redirects
+    # follow redirects — page.url may differ from original URL
     print(f"  HTTP {page.status_code}  ({len(page.html):,} bytes)  [{monotonic()-t0:.1f}s]")
 
     # 2 — Sanitize (Layer 1: strip hidden content)
