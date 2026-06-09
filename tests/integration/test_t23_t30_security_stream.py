@@ -23,9 +23,12 @@ import respx
 from charlotte.core.engine import crawl
 from charlotte.exceptions import CharlotteConfigError
 from charlotte.models import (
+    CandidatesExtracted,
     CrawlComplete,
     CrawlResult,
     CrawlStarted,
+    GoalPreprocessed,
+    LinksRanked,
     ModelDecision,
     PageFetched,
     PageSkipped,
@@ -64,6 +67,7 @@ async def test_t23_hidden_injection_text_stripped():
     result = await crawl(
         _START, _GOAL,
         model=_capturing, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found
@@ -177,13 +181,17 @@ async def test_t27_stream_true_emits_all_event_types_in_order():
     events = await collect(crawl(
         _START, _GOAL,
         model=model, stream=True, respect_robots=False, default_delay=0,
+        verify_destination="off",
     ))
 
     types = [type(e) for e in events]
-    assert types[0] is CrawlStarted,   "First event must be CrawlStarted"
-    assert types[-1] is CrawlComplete, "Last event must be CrawlComplete"
+    assert types[0] is CrawlStarted,    "First event must be CrawlStarted"
+    assert types[-1] is CrawlComplete,  "Last event must be CrawlComplete"
+    assert GoalPreprocessed in types
     assert PageFetched in types
+    assert LinksRanked in types
     assert ModelDecision in types
+    assert CandidatesExtracted in types
     assert ResultFound in types
 
 
@@ -200,6 +208,7 @@ async def test_t28_stream_false_returns_crawl_result():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert isinstance(result, CrawlResult)
@@ -228,6 +237,7 @@ async def test_t29_low_confidence_candidate_not_recorded():
     result = await crawl(
         _START, _GOAL,
         model=model, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

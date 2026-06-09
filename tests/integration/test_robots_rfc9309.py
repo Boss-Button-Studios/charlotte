@@ -41,6 +41,7 @@ async def test_robots_403_treated_as_no_restrictions():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=True, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found
@@ -61,6 +62,7 @@ async def test_robots_401_treated_as_no_restrictions():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=True, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found
@@ -134,6 +136,7 @@ async def test_robots_301_redirect_followed():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=True, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

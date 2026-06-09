@@ -8,6 +8,7 @@ The underlying crawl and event stream are identical to crawl(). See spec §5.2.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from charlotte.config import CharlotteConfig
@@ -31,6 +32,7 @@ def _to_link_result(result: CrawlResult) -> LinkResult:
             note = (
                 f"No matching link found after visiting {result.pages_visited} page(s)."
             )
+    result_content = (result.result_contents[0] if result.result_contents else None)
     return LinkResult(
         found=result.found,
         urls=result.result_urls,
@@ -39,6 +41,7 @@ def _to_link_result(result: CrawlResult) -> LinkResult:
         best_candidate_url=result.best_candidate_url,
         budget_exhausted=result.budget_exhausted,
         note=note,
+        result_content=result_content,
     )
 
 
@@ -65,6 +68,11 @@ def find_link(
     preprocessor: "Any | None" = None,
     ranker: "Any | None" = None,
     locale: str = "en_US",
+    verify_destination: str = "relevance",
+    verify_threshold: float = 0.3,
+    fetch_result_content: "bool | None" = None,
+    max_result_bytes: int = 10_485_760,
+    result_to_file: "Path | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
@@ -142,6 +150,11 @@ def find_link(
         preprocessor=preprocessor,
         ranker=ranker,
         locale=locale,
+        verify_destination=verify_destination,
+        verify_threshold=verify_threshold,
+        fetch_result_content=fetch_result_content,
+        max_result_bytes=max_result_bytes,
+        result_to_file=result_to_file,
     )
 
     resolved_stream = CharlotteConfig.stream() if stream is None else stream

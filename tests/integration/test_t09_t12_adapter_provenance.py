@@ -46,6 +46,7 @@ async def test_t09_schema_retry_succeeds_on_second_attempt():
     result = await crawl(
         _START, _GOAL,
         model=_adapter, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

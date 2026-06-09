@@ -250,6 +250,7 @@ async def test_apex_to_www_redirect_is_followed():
             "http://example.com/", _GOAL,
             model=_adapter_found("http://www.example.com/"),
             stream=False, respect_robots=True, default_delay=0.0,
+            verify_destination="off",
         )
     finally:
         fetcher_mod.PageFetcher.fetch = original_fetch
@@ -270,6 +271,7 @@ async def test_result_found_on_start_page():
         _START, _GOAL,
         model=_adapter_found(_START),
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert result.pages_visited == 1
@@ -289,6 +291,7 @@ async def test_multi_hop_follows_link_to_result():
         _START, _GOAL,
         model=_adapter_found(_CONTACT),
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert _CONTACT in result.result_urls
@@ -334,6 +337,7 @@ async def test_max_results_1_stops_at_first_match():
         _START, _GOAL,
         model=_adapter, max_results=1,
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert len(result.result_urls) == 1
@@ -364,6 +368,7 @@ async def test_max_results_none_collects_all_matches():
         _START, _GOAL,
         model=_adapter, max_results=None,
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert len(result.result_urls) == 2
@@ -466,6 +471,7 @@ async def test_robots_false_skips_robots_check():
         _START, _GOAL,
         model=_adapter_found(_START),
         stream=False, respect_robots=False, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert result.pages_visited == 1
@@ -660,6 +666,7 @@ async def test_return_content_populates_content_field():
         _START, _GOAL,
         model=_adapter_found(_START),
         return_content=True, stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert result.content is not None
@@ -736,6 +743,7 @@ async def test_result_found_event_emitted_on_match():
         _START, _GOAL,
         model=_adapter_found(_START),
         stream=True, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     ))
     result_found_events = [e for e in events if isinstance(e, ResultFound)]
     assert len(result_found_events) == 1
@@ -751,6 +759,7 @@ async def test_crawl_complete_reports_correct_counts():
         _START, _GOAL,
         model=_adapter_found(_START),
         stream=True, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     ))
     complete = [e for e in events if isinstance(e, CrawlComplete)][0]
     assert complete.found is True
@@ -783,6 +792,7 @@ async def test_explicit_allowed_domains_restricts_navigation():
         model=_adapter_found(_CONTACT),
         allowed_domains=["example.com"],
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
     assert result.found is True
     assert evil_route.call_count == 0
@@ -866,6 +876,7 @@ async def test_answer_content_gate_passes_when_answer_in_body():
         _START, "Find the phone number",
         model=_adapter_fact_answer(_PHONE),
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True
@@ -901,6 +912,7 @@ async def test_answer_content_gate_passes_when_answer_in_title():
         _START, "Find the phone number",
         model=_adapter_fact_answer(_PHONE),
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True
@@ -926,6 +938,7 @@ async def test_answer_content_gate_whitespace_normalization():
         _START, "Find the phone number",
         model=_adapter_fact_answer("555 - 867 - 5309"),
         stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True
@@ -962,6 +975,7 @@ async def test_plausibility_instruction_mirroring_retry_succeeds():
     result = await crawl(
         _START, _GOAL,
         model=_adapter, stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True
@@ -997,6 +1011,7 @@ async def test_plausibility_zero_links_no_path_refetch_succeeds():
     result = await crawl(
         _START, _GOAL,
         model=_adapter, stream=False, respect_robots=True, default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True

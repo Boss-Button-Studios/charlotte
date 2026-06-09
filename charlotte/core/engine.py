@@ -5,21 +5,33 @@ from __future__ import annotations
 import heapq
 import logging
 import math
-import re
+from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.adapter_validation import call_with_validation
-from charlotte.core.engine_support import _elapsed_ms, _empty_result, _rank_links, _resolve_default_adapter
+from charlotte.core.candidate_extractor import DefaultCandidateExtractor
+from charlotte.core.destination_verifier import DefaultDestinationVerifier
+from charlotte.core.engine_support import (
+    _build_crawl_result,
+    _check_result,
+    _content_metadata,
+    _elapsed_ms,
+    _empty_result,
+    _make_links_ranked,
+    _rank_links,
+    _resolve_default_adapter,
+    _run_extractor,
+    _verify_candidate,
+)
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
 from charlotte.core.goal_preprocessor import DeterministicPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
-from charlotte.core.provenance import check_provenance
 from charlotte.core.robots import RobotsHandler
 from charlotte.core.sanitizer import strip_hidden
 from charlotte.exceptions import (
@@ -33,9 +45,13 @@ from charlotte.exceptions import (
 )
 from charlotte.models import (
     BudgetExhausted,
+    CandidatesExtracted,
     CrawlComplete,
     CrawlResult,
     CrawlStarted,
+    DestinationVerificationFailed,
+    FailureMode,
+    GoalPreprocessed,
     ModelDecision,
     ModelEvaluating,
     PageFetched,
@@ -47,6 +63,8 @@ from charlotte.models import (
 
 if TYPE_CHECKING:
     from charlotte.adapters.base import AdapterProtocol
+    from charlotte.core.candidate_extractor import CandidateExtractorProtocol
+    from charlotte.core.destination_verifier import DestinationVerifierProtocol
     from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
     from charlotte.core.link_ranker import LinkRankerProtocol
     from charlotte.models import GoalContext
@@ -83,58 +101,35 @@ def crawl(
     preprocessor: "GoalPreprocessorProtocol | None" = None,
     ranker: "LinkRankerProtocol | None" = None,
     locale: str = "en_US",
+    candidate_extractor: "CandidateExtractorProtocol | None" = None,
+    verifier: "DestinationVerifierProtocol | None" = None,
+    verify_destination: str = "relevance",
+    verify_threshold: float = 0.3,
+    fetch_result_content: "bool | None" = None,
+    max_result_bytes: int = 10_485_760,
+    result_to_file: "Path | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
-    """Navigate toward *goal* starting from *start_url*.
+    """Navigate toward *goal* starting from *start_url*. See spec §4, §5.1.
 
-    Args:
-        start_url:            Absolute URL at which to begin.
-        goal:                 Natural language description of what to find.
-        model:                Adapter callable (AdapterProtocol). None resolves
-                              via CHARLOTTE_DEFAULT_ADAPTER (default: LocalAdapter).
-                              Raises CharlotteConfigError if the resolved adapter
-                              cannot be configured (e.g. missing GROQ_API_KEY).
-        max_pages:            Hard ceiling on total pages fetched.
-        max_depth:            Maximum link-hops from start_url.
-        max_results:          Stop after this many confirmed results; None = collect all.
-        confidence_threshold: Minimum model confidence to record a result (0–1).
-        render_js:            Use Playwright (headless Chromium) to render pages.
-                              Raises CharlotteConfigError if playwright is not installed.
-        allowed_domains:      Hostnames Charlotte may visit; defaults to start_url domain.
-        return_content:       Include sanitized page text in CrawlResult.content.
-        navigation_hint:      Extra context passed to the model alongside the goal.
-        stream:               True → return AsyncGenerator of events.
-                              False → return coroutine resolving to CrawlResult.
-        respect_robots:       Fetch and obey robots.txt before crawling.
-        connect_timeout:      TCP connection timeout for HTTP requests (seconds).
-        read_timeout:         Response body read timeout (seconds).
-        render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
-        default_delay:        Floor for the polite inter-request delay (seconds).
-        chromium_executable:  Path to a Chromium/Chrome binary. Use when Playwright's
-                              bundled Chromium doesn't support the current OS (e.g.
-                              Ubuntu 26.04). Ignored when render_js=False.
-        max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
-                              Larger responses are skipped as PageSkipped events.
-        user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT env
-                              var, or the built-in default (charlotte-crawler/1.0).
-
-    Returns:
-        AsyncGenerator[StreamEvent, None] when stream=True.
-        Coroutine[CrawlResult] when stream=False — use `await crawl(...)`.
+    Key args:
+        model:               Adapter callable. None → CHARLOTTE_DEFAULT_ADAPTER.
+        max_pages:           Page budget ceiling.
+        max_results:         Stop after N results; None = collect all.
+        verify_destination:  "off" / "existence" / "relevance" (default) / "full".
+        verify_threshold:    BM25/embedding threshold (default 0.3). See spec §7.3.
+        fetch_result_content: Capture bytes per result. None = on for document_link.
+        result_to_file:      Directory for file-based content delivery. See spec §7.7.
+        stream:              True → AsyncGenerator; False → Coroutine[CrawlResult].
 
     Raises:
-        CharlotteConfigError: Invalid configuration (playwright not installed,
-                              invalid start_url, no model, or start_url targets a
-                              private/reserved address).
+        CharlotteConfigError: Bad config (no model, invalid URL, playwright absent).
     """
-    # Resolve env-var defaults for sentinel parameters (spec §6.3).
     if stream is None:
         stream = CharlotteConfig.stream()
     if respect_robots is None:
         respect_robots = CharlotteConfig.respect_robots()
 
     if render_js:
-        # Check availability before the generator starts — spec §8 requires the
-        # error to surface immediately, not on the first iteration.
         _import_playwright()
     if not math.isfinite(render_timeout) or render_timeout <= 0:
         raise CharlotteConfigError(
@@ -147,9 +142,6 @@ def crawl(
     except CharlotteConfigError as exc:
         raise CharlotteConfigError(f"Invalid start_url: {exc}") from exc
 
-    # SSRF check — raise before the generator starts so callers see an immediate
-    # CharlotteSSRFError (a CharlotteConfigError) rather than a skipped page.
-    # The fetcher also checks on every request, catching redirected addresses.
     try:
         validate_url_safety(normalized_start)
     except CharlotteSSRFError:
@@ -159,13 +151,25 @@ def crawl(
 
     _preprocessor = preprocessor or DeterministicPreprocessor()
     _ranker = ranker or BM25LinkRanker()
+    _extractor = candidate_extractor or DefaultCandidateExtractor()
+    _verifier = verifier or DefaultDestinationVerifier(
+        mode=verify_destination,
+        verify_threshold=verify_threshold,
+        fetch_result_content=fetch_result_content,
+        max_result_bytes=max_result_bytes,
+        result_to_file=result_to_file,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        user_agent=resolved_user_agent,
+    )
+
+    ctx_t0 = monotonic()
     goal_context = _preprocessor(goal, navigation_hint, locale)
+    ctx_ms = _elapsed_ms(ctx_t0)
 
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     _domains: frozenset[str]
     if allowed_domains is None:
-        # Auto-include the www./non-www counterpart so that apex→www (or www→apex)
-        # redirects on the start URL don't immediately raise CharlotteRedirectError.
         if start_hostname.startswith("www."):
             _domains = frozenset({start_hostname, start_hostname[4:]})
         else:
@@ -196,7 +200,11 @@ def crawl(
         max_response_bytes=max_response_bytes,
         user_agent=resolved_user_agent,
         goal_context=goal_context,
+        goal_context_ms=ctx_ms,
         ranker=_ranker,
+        candidate_extractor=_extractor,
+        verifier=_verifier,
+        locale=locale,
     )
 
     if stream:
@@ -237,7 +245,11 @@ async def _crawl_core(
     max_response_bytes: int,
     user_agent: str,
     goal_context: "GoalContext",
+    goal_context_ms: int,
     ranker: "LinkRankerProtocol",
+    candidate_extractor: "CandidateExtractorProtocol",
+    verifier: "DestinationVerifierProtocol",
+    locale: str,
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
 
@@ -247,6 +259,11 @@ async def _crawl_core(
         max_pages=max_pages,
         max_depth=max_depth,
         max_results=max_results,
+    )
+    yield GoalPreprocessed(
+        goal_context=goal_context,
+        duration_ms=goal_context_ms,
+        source="fresh",
     )
 
     robots: RobotsHandler | None = (
@@ -260,8 +277,7 @@ async def _crawl_core(
             polite_delay = await robots.check(start_url, default_delay)
         except RobotsError as exc:
             yield PageSkipped(url=start_url, reason=str(exc), error_type="RobotsError")
-            result = _empty_result(budget_exhausted=False)
-            result_holder.append(result)
+            result_holder.append(_empty_result(budget_exhausted=False))
             yield CrawlComplete(
                 found=False, result_count=0, pages_visited=0, depth_reached=0,
                 elapsed_ms=_elapsed_ms(start_time),
@@ -280,9 +296,6 @@ async def _crawl_core(
         user_agent=user_agent,
     )
 
-    # Priority queue: (neg_score, serial, url, depth). Heapq is a min-heap so
-    # we negate the BM25 score to pop highest-relevance links first. Serial
-    # ensures a stable tiebreak for equal scores (FIFO within same score).
     _q_serial = 0
     queue: list[tuple[float, int, str, int]] = []
     heapq.heappush(queue, (0.0, _q_serial, start_url, 0))
@@ -291,14 +304,17 @@ async def _crawl_core(
 
     visited: set[str] = set()
     result_urls: list[str] = []
-    answers_list: list[str | None] = []
+    answers_list: list = []
     content_list: list[str] = []
     visit_log: list[VisitLogEntry] = []
+    verified_candidates = []
+    result_contents = []
     pages_visited = 0
     depth_reached = 0
     best_url: str | None = None
     best_conf: float = 0.0
     depth_budget_used = False
+    n_verified = 0   # model-confirmed candidates sent to verifier
 
     while queue and pages_visited < max_pages:
         _, _, url, depth = heapq.heappop(queue)
@@ -312,7 +328,6 @@ async def _crawl_core(
         visited.add(norm)
         depth_reached = max(depth_reached, depth)
 
-        # Per-URL robots gate (handler caches per domain)
         if robots is not None:
             try:
                 await robots.check(url, default_delay)
@@ -320,10 +335,7 @@ async def _crawl_core(
                 yield PageSkipped(url=url, reason=str(exc), error_type="RobotsError")
                 continue
 
-        # Fetch
         try:
-            # Exclude the current URL from visited so its own canonical redirect
-            # (e.g. /path → /path/) is not mistaken for a cross-crawl revisit.
             page = await fetcher.fetch(
                 url,
                 visited_urls=visited - {norm},
@@ -343,21 +355,22 @@ async def _crawl_core(
         pages_visited += 1
         yield PageFetched(url=page.url, depth=depth, http_status=page.status_code, fetch_ms=page.fetch_ms)
 
-        # Sanitize → extract (no domain filter — model sees all observable links;
-        # navigation is restricted at the enqueue step below)
         clean = strip_hidden(page.html)
         extracted = extract(clean, page_url=page.url)
 
-        # Rank links by BM25 relevance to the goal before the model call so
-        # the model receives candidates in best-first order. score_map is also
-        # used at enqueue time to populate the priority queue.
+        rank_t0 = monotonic()
         _rl = _rank_links(ranker, goal_context, extracted.links)
         _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
         ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
         score_map = {normalize_url(u): s for u, s in _rl}
+        yield _make_links_ranked(page.url, _rl, _url_to_link, _elapsed_ms(rank_t0))
 
-        # Model call — include the current page in history so the model
-        # doesn't recommend it as a next step when it's already standing on it.
+        ext_t0 = monotonic()
+        candidates = await _run_extractor(candidate_extractor, goal_context, extracted, locale)
+        yield CandidatesExtracted(
+            page_url=page.url, candidates=candidates, duration_ms=_elapsed_ms(ext_t0),
+        )
+
         history = [e.url for e in visit_log[-10:]] + [page.url]
         yield ModelEvaluating(url=page.url)
         try:
@@ -376,10 +389,6 @@ async def _crawl_core(
             yield PageSkipped(url=page.url, reason=str(exc), error_type="AdapterOutputError")
             continue
 
-        # Plausibility check — runs on raw model output, before provenance.
-        # Spec §9.3 (plausibility) precedes §9.4 (provenance). Using raw output
-        # keeps the navigation quality check independent of the security check so
-        # a provenance rejection cannot cascade into a plausibility skip.
         raw_decision = NavDecision(
             found=output.found,
             confidence=output.confidence,
@@ -395,7 +404,6 @@ async def _crawl_core(
         if not plaus.passed:
             flag_names = {f.name for f in plaus.flags}
             if "zero_links_no_path" in flag_names:
-                # Re-fetch once — may be a transient sanitizer/extractor issue.
                 try:
                     page = await fetcher.fetch(
                         url, visited_urls=visited - {norm},
@@ -428,7 +436,6 @@ async def _crawl_core(
                 )
                 plaus = check_plausibility(raw_decision, page_text=extracted.text, visited_urls=visited)
             elif flag_names & {"instruction_mirroring", "confidence_spike"}:
-                # Retry with a reinforced prompt hint — recovers from one-off injection.
                 hint = (
                     "IMPORTANT: Your previous response was rejected by the navigation "
                     "plausibility check. Reason: "
@@ -460,51 +467,9 @@ async def _crawl_core(
                 yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
                 continue
 
-        # Provenance check — current page URL is also "observed" by the model,
-        # so it is valid as a result_url even if not present as a link on the page.
-        # extracted_link_urls includes off-domain links; allowed_domains restricts
-        # navigation (enqueueing) only — CrawlResult.result_urls may contain
-        # off-domain hosts when the goal is to find an external URL.
-        extracted_link_urls = [page.url] + [link["url"] for link in extracted.links]
-        # For fact goals (answer != None) the result lives on the current page.
-        # Override result_url to page.url BEFORE provenance so the check always
-        # passes — models reliably hallucinate result_url on fact goals while
-        # correctly extracting the answer value. page.url is always in
-        # extracted_link_urls so provenance will accept it.
-        provenance_result_url = (
-            page.url
-            if (output.found and output.answer is not None)
-            else output.result_url
+        effective_found, effective_result_url, effective_links = _check_result(
+            output, page, extracted,
         )
-        prov = check_provenance(
-            found=output.found,
-            result_url=provenance_result_url,
-            links_to_follow=output.links_to_follow,
-            extracted_urls=extracted_link_urls,
-        )
-        effective_found = output.found and prov.result_url_accepted
-        effective_result_url = provenance_result_url if effective_found else None
-        effective_links = prov.links_to_follow
-
-        if not prov.result_url_accepted and prov.rejection_detail:
-            logger.debug("Provenance rejection at %r: %s", page.url, prov.rejection_detail)
-
-        # Answer content gate — spec §9.4: the answer must be a "verbatim fact
-        # copied from the page". Verify it appears (after whitespace normalization)
-        # in the extracted text or title before promotion.
-        if effective_found and output.answer is not None:
-            full_text = re.sub(
-                r"\s+", " ", f"{extracted.title}\n{extracted.text}".strip()
-            ).casefold()
-            norm_answer = re.sub(r"\s+", " ", output.answer.strip()).casefold()
-            if norm_answer and norm_answer not in full_text:
-                logger.debug(
-                    "Answer content gate rejected at %r: normalized answer missing "
-                    "from page text (answer_length=%d)",
-                    page.url, len(output.answer),
-                )
-                effective_found = False
-                effective_result_url = None
 
         visit_log.append(VisitLogEntry(
             url=page.url,
@@ -514,7 +479,6 @@ async def _crawl_core(
             reasoning=output.reasoning,
         ))
 
-        # Enqueue confirmed links — priority ordered by BM25 score from score_map.
         enqueued = 0
         for link_url in effective_links:
             next_depth = depth + 1
@@ -546,23 +510,32 @@ async def _crawl_core(
         )
 
         if effective_found and output.confidence >= confidence_threshold:
-            result_urls.append(effective_result_url)  # type: ignore[arg-type]
-            answers_list.append(output.answer)
-            if return_content:
-                content_list.append(extracted.text)
-            yield ResultFound(
-                url=effective_result_url,  # type: ignore[arg-type]
-                confidence=output.confidence,
-                result_index=len(result_urls),
-                answer=output.answer,
+            n_verified += 1
+            vresult, vcontent = await _verify_candidate(
+                verifier, effective_result_url, goal_context,  # type: ignore[arg-type]
             )
-            if max_results is not None and len(result_urls) >= max_results:
-                break
+            verified_candidates.append(vresult)
+            if not vresult.passed:
+                yield DestinationVerificationFailed(url=effective_result_url, result=vresult)  # type: ignore[arg-type]
+            else:
+                result_urls.append(effective_result_url)  # type: ignore[arg-type]
+                answers_list.append(output.answer)
+                result_contents.append(vcontent)
+                if return_content:
+                    content_list.append(extracted.text)
+                yield ResultFound(
+                    url=effective_result_url,  # type: ignore[arg-type]
+                    confidence=output.confidence,
+                    result_index=len(result_urls),
+                    answer=output.answer,
+                    content_metadata=_content_metadata(vcontent),
+                )
+                if max_results is not None and len(result_urls) >= max_results:
+                    break
         elif output.confidence > best_conf:
             best_conf = output.confidence
             best_url = output.result_url or page.url
 
-    # Budget exhaustion: page limit hit with items remaining, or depth cap triggered
     stopped_at_limit = pages_visited >= max_pages and bool(queue)
     budget_exhausted = stopped_at_limit or depth_budget_used
 
@@ -574,17 +547,28 @@ async def _crawl_core(
             best_candidate=best_url,
         )
 
-    result = CrawlResult(
+    failure_mode: FailureMode | None = None
+    if not found:
+        if n_verified > 0 and not result_urls:
+            failure_mode = FailureMode.ALL_CANDIDATES_REJECTED
+        elif budget_exhausted:
+            failure_mode = FailureMode.BUDGET_EXHAUSTED
+
+    result = _build_crawl_result(
         found=found,
         result_urls=result_urls,
-        content=content_list if return_content else None,
-        confidence=max((e.confidence for e in visit_log if e.found), default=best_conf),
+        answers_list=answers_list,
+        content_list=content_list,
+        return_content=return_content,
+        visit_log=visit_log,
         pages_visited=pages_visited,
         depth_reached=depth_reached,
-        visit_log=visit_log,
-        best_candidate_url=best_url if not found else None,
+        best_url=best_url,
         budget_exhausted=budget_exhausted,
-        answers=answers_list if found else None,
+        goal_context=goal_context,
+        verified_candidates=verified_candidates,
+        result_contents=result_contents,
+        failure_mode=failure_mode,
     )
     result_holder.append(result)
 
@@ -594,6 +578,6 @@ async def _crawl_core(
         pages_visited=pages_visited,
         depth_reached=depth_reached,
         elapsed_ms=_elapsed_ms(start_time),
+        failure_mode=failure_mode,
+        goal_context=goal_context,
     )
-
-

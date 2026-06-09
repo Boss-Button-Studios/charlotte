@@ -47,7 +47,7 @@ async def test_t05_playwright_renders_page():
             _START, _GOAL,
             model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
             stream=False, respect_robots=False, default_delay=0,
-            render_js=True,
+            render_js=True, verify_destination="off",
         )
 
     assert result.found
@@ -95,6 +95,7 @@ async def test_t07_robots_404_means_no_restrictions():
         _START, _GOAL,
         model=seq(nav(found=True, confidence=0.95, result_url=_START, links=[])),
         stream=False, respect_robots=True, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

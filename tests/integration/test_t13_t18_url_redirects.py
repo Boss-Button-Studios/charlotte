@@ -119,6 +119,7 @@ async def test_t15_redirect_within_allowed_domain_followed():
     result = await crawl(
         _START, _GOAL,
         model=model, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert result.found

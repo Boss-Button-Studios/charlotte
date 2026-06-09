@@ -245,6 +245,7 @@ async def test_find_link_result_found():
         stream=False,
         respect_robots=True,
         default_delay=0.0,
+        verify_destination="off",
     )
 
     assert isinstance(result, LinkResult)
@@ -291,6 +292,7 @@ async def test_find_link_collects_multiple_results():
         stream=False,
         respect_robots=True,
         default_delay=0.0,
+        verify_destination="off",
     )
 
     assert result.found is True

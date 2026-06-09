@@ -137,6 +137,7 @@ async def test_t22_find_link_collects_all_matches():
     result: LinkResult = await find_link(
         _START, _GOAL,
         model=model, stream=False, respect_robots=False, default_delay=0,
+        verify_destination="off",
     )
 
     assert isinstance(result, LinkResult)
