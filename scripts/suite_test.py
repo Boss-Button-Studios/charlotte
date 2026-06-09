@@ -165,6 +165,39 @@ TRIALS: list[Trial] = [
         max_depth=1,
         tags=["fact", "lz", "docs"],
     ),
+    # --- Deep navigation: target is 2-3 hops from start, many wrong links at each step ---
+    Trial(
+        name="nav_itertools_page",
+        url="https://docs.python.org/3/",
+        goal="Find the itertools module reference page",
+        max_pages=8,
+        max_depth=3,
+        tags=["navigation", "docs", "multi-hop"],
+    ),
+    Trial(
+        name="nav_whatsnew_312",
+        url="https://www.python.org",
+        goal="Find the What's New in Python 3.12 page",
+        max_pages=10,
+        max_depth=4,
+        tags=["navigation", "multi-hop"],
+    ),
+    Trial(
+        name="nav_iana_port_assignments",
+        url="https://www.iana.org/",
+        goal="Find the page listing service name and port number assignments",
+        max_pages=8,
+        max_depth=3,
+        tags=["navigation", "iana", "multi-hop"],
+    ),
+    Trial(
+        name="mh_functools_cache",
+        url="https://docs.python.org/3/",
+        goal="What is the name of the functools function that caches a function's return values to avoid recomputing them?",
+        max_pages=8,
+        max_depth=3,
+        tags=["fact", "docs", "multi-hop"],
+    ),
 ]
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,30 @@
       "answer_contains": ["loads", "json.loads"],
       "result_url_contains": null,
       "note": "json.loads() is the function for parsing a JSON string in Python"
+    },
+    "nav_itertools_page": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "library/itertools",
+      "note": "docs.python.org/3/library/itertools.html — the itertools module reference"
+    },
+    "nav_whatsnew_312": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "whatsnew/3.12",
+      "note": "docs.python.org/3/whatsnew/3.12.html — What's New in Python 3.12"
+    },
+    "nav_iana_port_assignments": {
+      "found": true,
+      "answer_contains": null,
+      "result_url_contains": "service-names-port-numbers",
+      "note": "iana.org/assignments/service-names-port-numbers/ — IANA port assignments"
+    },
+    "mh_functools_cache": {
+      "found": true,
+      "answer_contains": ["cache", "lru_cache"],
+      "result_url_contains": null,
+      "note": "functools.cache (or lru_cache) memoizes function return values"
     }
   }
 }
