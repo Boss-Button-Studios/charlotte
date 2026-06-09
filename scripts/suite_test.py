@@ -190,6 +190,7 @@ TRIALS: list[Trial] = [
         max_depth=3,
         tags=["navigation", "iana", "multi-hop"],
     ),
+    # --- Multi-hop fact: navigate 2-3 hops to the answer page, then extract ---
     Trial(
         name="mh_functools_cache",
         url="https://docs.python.org/3/",
