@@ -197,7 +197,7 @@ async def test_groq_error_not_logged_at_warning_by_default(caplog):
 @pytest.mark.asyncio
 async def test_local_http_status_error_suppresses_response_body():
     """HTTP error response body (may contain server secrets) is not chained."""
-    respx.post("http://localhost:11434/v1/chat/completions").mock(
+    respx.post("http://localhost:11434/api/chat").mock(
         return_value=httpx.Response(401, text="Unauthorized: bad credentials xyz")
     )
     adapter = LocalAdapter()
@@ -214,9 +214,9 @@ async def test_local_http_status_error_suppresses_response_body():
 async def test_local_json_decode_error_suppresses_model_output():
     """JSONDecodeError.doc (model output) is not chained to the raised exception."""
     sensitive = "SENSITIVE MODEL OUTPUT CONTENT"
-    respx.post("http://localhost:11434/v1/chat/completions").mock(
+    respx.post("http://localhost:11434/api/chat").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": f"not json: {sensitive}"}}]
+            "message": {"content": f"not json: {sensitive}"}, "done": True
         })
     )
     adapter = LocalAdapter()
@@ -234,7 +234,7 @@ async def test_local_json_decode_error_suppresses_model_output():
 async def test_local_unexpected_structure_suppresses_response():
     """KeyError/IndexError from malformed response structure is not chained."""
     # Return a response missing the expected 'choices' structure.
-    respx.post("http://localhost:11434/v1/chat/completions").mock(
+    respx.post("http://localhost:11434/api/chat").mock(
         return_value=httpx.Response(200, json={"unexpected": "shape"})
     )
     adapter = LocalAdapter()
@@ -250,7 +250,7 @@ async def test_local_unexpected_structure_suppresses_response():
 @pytest.mark.asyncio
 async def test_local_api_error_logged_at_debug(caplog):
     """Network failure is logged at DEBUG on the charlotte.adapters.local logger."""
-    respx.post("http://localhost:11434/v1/chat/completions").mock(
+    respx.post("http://localhost:11434/api/chat").mock(
         side_effect=httpx.ConnectError("refused")
     )
     adapter = LocalAdapter()
@@ -266,7 +266,7 @@ async def test_local_api_error_logged_at_debug(caplog):
 @pytest.mark.asyncio
 async def test_local_timeout_preserved_as_charlotte_error():
     """Timeout exception is converted to CharlotteTimeoutError, not suppressed."""
-    respx.post("http://localhost:11434/v1/chat/completions").mock(
+    respx.post("http://localhost:11434/api/chat").mock(
         side_effect=httpx.TimeoutException("timed out")
     )
     adapter = LocalAdapter()

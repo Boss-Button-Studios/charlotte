@@ -28,7 +28,7 @@ from charlotte.exceptions import AdapterOutputError, CharlotteConfigError, Charl
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-_ENDPOINT = f"{_DEFAULT_BASE_URL}/v1/chat/completions"
+_ENDPOINT = f"{_DEFAULT_BASE_URL}/api/chat"
 
 _VALID_NAV_DICT: dict = {
     "found": False,
@@ -51,9 +51,9 @@ _PAGE_CONTEXT: dict = dict(
 
 
 def _ok_response(nav_dict: dict | None = None) -> httpx.Response:
-    """Build a 200 httpx.Response carrying the given nav dict as model content."""
+    """Build a 200 httpx.Response carrying the given nav dict as model content (Ollama native format)."""
     content = json.dumps(nav_dict or _VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": content}}]}
+    body = {"message": {"content": content}, "done": True}
     return httpx.Response(200, json=body)
 
 
@@ -62,10 +62,10 @@ def _ok_response(nav_dict: dict | None = None) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 def test_default_endpoint(monkeypatch):
-    """Default endpoint is _DEFAULT_BASE_URL + /v1/chat/completions."""
+    """Default endpoint is _DEFAULT_BASE_URL + /api/chat (Ollama native)."""
     monkeypatch.delenv("CHARLOTTE_LOCAL_BASE_URL", raising=False)
     adapter = LocalAdapter()
-    assert adapter._endpoint == f"{_DEFAULT_BASE_URL}/v1/chat/completions"
+    assert adapter._endpoint == f"{_DEFAULT_BASE_URL}/api/chat"
 
 
 def test_default_model(monkeypatch):
@@ -83,7 +83,7 @@ def test_env_base_url(monkeypatch):
     """CHARLOTTE_LOCAL_BASE_URL sets the endpoint."""
     monkeypatch.setenv("CHARLOTTE_LOCAL_BASE_URL", "http://myserver:8080")
     adapter = LocalAdapter()
-    assert adapter._endpoint == "http://myserver:8080/v1/chat/completions"
+    assert adapter._endpoint == "http://myserver:8080/api/chat"
 
 
 def test_env_model(monkeypatch):
@@ -101,7 +101,7 @@ def test_explicit_base_url_overrides_env(monkeypatch):
     """Explicit base_url= takes precedence over CHARLOTTE_LOCAL_BASE_URL."""
     monkeypatch.setenv("CHARLOTTE_LOCAL_BASE_URL", "http://envserver:9999")
     adapter = LocalAdapter(base_url="http://argserver:8080")
-    assert adapter._endpoint == "http://argserver:8080/v1/chat/completions"
+    assert adapter._endpoint == "http://argserver:8080/api/chat"
 
 
 def test_explicit_model_name_overrides_env(monkeypatch):
@@ -118,7 +118,7 @@ def test_explicit_model_name_overrides_env(monkeypatch):
 def test_trailing_slash_stripped():
     """Trailing slash in base_url is stripped before appending the path."""
     adapter = LocalAdapter(base_url="http://localhost:11434/")
-    assert adapter._endpoint == "http://localhost:11434/v1/chat/completions"
+    assert adapter._endpoint == "http://localhost:11434/api/chat"
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +181,8 @@ async def test_request_sent_to_configured_endpoint():
 @respx.mock
 async def test_custom_base_url_uses_correct_endpoint():
     """A custom base_url targets the right endpoint."""
-    custom = "http://lmstudio:1234"
-    respx.post(f"{custom}/v1/chat/completions").mock(return_value=_ok_response())
+    custom = "http://myollama:1234"
+    respx.post(f"{custom}/api/chat").mock(return_value=_ok_response())
     result = await LocalAdapter(base_url=custom)(**_PAGE_CONTEXT)
     assert result["found"] is False
 
@@ -402,24 +402,24 @@ async def test_non_json_http_body_raises_adapter_output_error():
 @respx.mock
 async def test_non_json_model_content_raises_adapter_output_error():
     """Plain-text model content (not JSON) raises AdapterOutputError."""
-    body = {"choices": [{"message": {"content": "I cannot help with that."}}]}
+    body = {"message": {"content": "I cannot help with that."}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(AdapterOutputError, match="not valid JSON"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
 
 @respx.mock
-async def test_missing_choices_key_raises_adapter_output_error():
-    """Missing 'choices' key in response raises AdapterOutputError."""
+async def test_missing_message_key_raises_adapter_output_error():
+    """Missing 'message' key in Ollama response raises AdapterOutputError."""
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"result": "x"}))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
 
 @respx.mock
-async def test_empty_choices_list_raises_adapter_output_error():
-    """Empty 'choices' list raises AdapterOutputError."""
-    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"choices": []}))
+async def test_null_message_raises_adapter_output_error():
+    """Null 'message' value in response raises AdapterOutputError."""
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"message": None}))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
@@ -427,7 +427,7 @@ async def test_empty_choices_list_raises_adapter_output_error():
 @respx.mock
 async def test_missing_content_key_raises_adapter_output_error():
     """Missing 'content' in message raises AdapterOutputError."""
-    body = {"choices": [{"message": {"role": "assistant"}}]}
+    body = {"message": {"role": "assistant"}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
@@ -441,7 +441,7 @@ async def test_missing_content_key_raises_adapter_output_error():
 async def test_think_tag_stripped_before_json_parse():
     """<think>...</think> block before JSON is stripped; valid JSON is returned."""
     raw = "<think>Let me reason about this step by step.</think>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -451,7 +451,7 @@ async def test_think_tag_stripped_before_json_parse():
 async def test_thinking_tag_variant_stripped():
     """<thinking>...</thinking> variant (some models use this form) is also stripped."""
     raw = "<thinking>Internal chain-of-thought here.</thinking>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -462,7 +462,7 @@ async def test_think_tag_multiline_stripped():
     """A multi-line <think> block is fully stripped regardless of newlines."""
     think_block = "<think>\nLine one.\nLine two.\nLine three.\n</think>\n"
     raw = think_block + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -472,7 +472,7 @@ async def test_think_tag_multiline_stripped():
 async def test_lone_close_think_tag_stripped():
     """A lone </think> separator (opening tag absent from content) is stripped."""
     raw = "Some reasoning text here.</think>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False

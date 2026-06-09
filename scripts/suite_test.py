@@ -220,9 +220,9 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
                 ctx = event.goal_context
                 result.events.append({"type": "GoalPreprocessed", "elapsed_ms": elapsed_ms,
                                        "duration_ms": event.duration_ms, "source": event.source,
-                                       "goal_type": ctx.goal_type,
-                                       "goal_type_confidence": ctx.goal_type_confidence,
-                                       "anchor_terms": ctx.anchor_terms})
+                                       "goal_type": ctx.goal_type if ctx else None,
+                                       "goal_type_confidence": ctx.goal_type_confidence if ctx else None,
+                                       "anchor_terms": ctx.anchor_terms if ctx else []})
 
             elif isinstance(event, LinksRanked):
                 result.events.append({"type": "LinksRanked", "elapsed_ms": elapsed_ms,

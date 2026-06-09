@@ -1,15 +1,21 @@
 """
-LocalAdapter — calls any OpenAI-compatible local inference endpoint.
+LocalAdapter — calls the Ollama native chat API.
 
 Defaults to Ollama at http://localhost:11434 with DeepSeek R1 14B.
 No API key required. Uses httpx (already in Charlotte's core dependencies),
 so no additional package is needed to use this adapter.
 
-Compatible with Ollama, LM Studio, llama.cpp server, text-generation-webui,
-or any other server implementing the OpenAI Chat Completions API.
+Uses the Ollama native ``/api/chat`` endpoint (not the OpenAI-compatible
+``/v1/chat/completions`` path).  The native endpoint is required because:
 
-This is a fully supported production path — not a development-only tool.
-Choose between GroqAdapter and LocalAdapter based on your deployment context.
+  * ``options.num_ctx`` sets the inference context window — without it,
+    Ollama's default (2 048–4 096 tokens) is too small for pages with full
+    text (up to 16 KB) and causes HTTP 400 on the OpenAI endpoint.
+  * ``format: "json"`` enforces grammar-based JSON output at the GGUF level;
+    the OpenAI endpoint's ``response_format`` is silently ignored for many
+    models in Ollama 0.30+.
+
+For cloud-hosted models, use GroqAdapter instead.
 
 Environment variables:
     CHARLOTTE_LOCAL_BASE_URL — base URL for the inference server
@@ -53,14 +59,13 @@ _PHONE_RE = re.compile(r'\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}')
 # Markdown JSON fence: ```json { ... } ``` or ``` { ... } ```
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
-# Ollama's default num_ctx is 2048–4096 depending on the model load.  Prompts
-# that exceed it return HTTP 400.  Pages with full text (up to 16 KB) plus link
-# lists can reach ~5 000 tokens; 8 192 accommodates that with headroom.
+# Pages with full text (16 KB cap) plus many links can reach ~5 000 tokens.
+# 8 192 fits the largest expected prompts with headroom for the response.
 _OLLAMA_NUM_CTX = 8192
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "deepseek-r1:14b"
-_COMPLETIONS_PATH = "/v1/chat/completions"
+_CHAT_PATH = "/api/chat"
 
 _SYSTEM_PROMPT = """\
 You are a web navigation assistant. Given a web page and a navigation goal, you \
@@ -191,33 +196,41 @@ def _parse_model_json(raw: str) -> dict:
 
     deepseek-r1 and similar reasoning models sometimes wrap their JSON answer in
     a markdown code fence (```json { ... } ```) rather than returning raw JSON.
-    This function strips think-tag reasoning blocks first, then tries three
-    extraction strategies in order: direct parse, markdown-fence extraction, and
-    outermost-brace extraction.
+    Tries three strategies: direct parse, markdown-fence extraction, outermost-
+    brace extraction. Raises JSONDecodeError if none yield a JSON object (dict).
     """
     stripped = _strip_think_tags(raw)
+
+    def _load_object(candidate: str) -> dict:
+        parsed = json.loads(candidate)
+        if not isinstance(parsed, dict):
+            raise json.JSONDecodeError("expected JSON object, got non-dict", candidate, 0)
+        return parsed
+
     # Strategy 1: direct parse (clean output, most models)
     try:
-        return json.loads(stripped)
+        return _load_object(stripped)
     except json.JSONDecodeError:
         pass
     # Strategy 2: extract from markdown code fence
     m = _JSON_FENCE_RE.search(stripped)
     if m:
-        return json.loads(m.group(1))
+        return _load_object(m.group(1))
     # Strategy 3: find outermost { ... } block in free-form text
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start != -1 and end > start:
-        return json.loads(stripped[start : end + 1])
+        return _load_object(stripped[start : end + 1])
     raise json.JSONDecodeError("no JSON object found", stripped, 0)
 
 
 class LocalAdapter:
-    """Navigator model adapter for any OpenAI-compatible local inference endpoint.
+    """Navigator model adapter for the Ollama native chat API.
 
-    Targets the OpenAI Chat Completions API at ``{base_url}/v1/chat/completions``.
-    Works with Ollama, LM Studio, llama.cpp server, and any other compatible server.
+    Targets Ollama's ``/api/chat`` endpoint.  The native endpoint is required
+    over the OpenAI-compatible path because ``options.num_ctx`` (needed to
+    avoid HTTP 400 on large pages) and ``format: "json"`` (grammar-enforced
+    JSON output) are only reliably supported by the native API in Ollama 0.30+.
 
     No API key required. Uses httpx (already in Charlotte's core dependencies).
 
@@ -226,11 +239,11 @@ class LocalAdapter:
     controls the model host. See spec §6.3.
 
     Args:
-        base_url:   Base URL of the inference server. Constructor argument takes
+        base_url:   Base URL of the Ollama server. Constructor argument takes
                     precedence over ``CHARLOTTE_LOCAL_BASE_URL``.
-                    Default: ``http://localhost:11434`` (Ollama standard address).
-        model_name: Model name string passed to the API. Constructor argument takes
-                    precedence over ``CHARLOTTE_LOCAL_MODEL``.
+                    Default: ``http://localhost:11434``.
+        model_name: Model name string passed to the API. Constructor argument
+                    takes precedence over ``CHARLOTTE_LOCAL_MODEL``.
                     Default: ``deepseek-r1:14b``.
         timeout:    Total request timeout in seconds, or None for no timeout.
                     Local inference time is hardware-dependent and unbounded;
@@ -263,7 +276,7 @@ class LocalAdapter:
             )
 
         self._base_url = resolved_base
-        self._endpoint = resolved_base + _COMPLETIONS_PATH
+        self._endpoint = resolved_base + _CHAT_PATH
         self._model = model_name or os.environ.get("CHARLOTTE_LOCAL_MODEL", _DEFAULT_MODEL)
         self._timeout = timeout
         self._verbose = verbose
@@ -316,7 +329,7 @@ class LocalAdapter:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "format": "json",
             "stream": False,
             "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
@@ -341,7 +354,7 @@ class LocalAdapter:
 
         try:
             data = response.json()
-            raw_content = data["choices"][0]["message"]["content"] or ""
+            raw_content = data["message"]["content"] or ""
             return _rescue_answer_from_reasoning(_parse_model_json(raw_content))
         except json.JSONDecodeError:
             logger.debug("Local model response JSON decode failed")
@@ -358,7 +371,7 @@ class LocalAdapter:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "format": "json",
             "stream": True,
             "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
@@ -369,24 +382,19 @@ class LocalAdapter:
                 async with client.stream("POST", self._endpoint, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
+                        if not line:
                             continue
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
                         try:
-                            chunk = json.loads(data_str)
-                            token = (
-                                (chunk.get("choices") or [{}])[0]
-                                .get("delta", {})
-                                .get("content") or ""
-                            )
-                        except (json.JSONDecodeError, IndexError, KeyError):
+                            chunk = json.loads(line)
+                            token = chunk.get("message", {}).get("content") or ""
+                        except (json.JSONDecodeError, AttributeError):
                             continue
                         if token:
                             parts.append(token)
                             sys.stderr.write(token)
                             sys.stderr.flush()
+                        if chunk.get("done"):
+                            break
         except httpx.TimeoutException as exc:
             logger.debug("Local model call timed out", exc_info=True)
             raise CharlotteTimeoutError("Local model call timed out") from exc
