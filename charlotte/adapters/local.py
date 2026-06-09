@@ -215,7 +215,10 @@ def _parse_model_json(raw: str) -> dict:
     # Strategy 2: extract from markdown code fence
     m = _JSON_FENCE_RE.search(stripped)
     if m:
-        return _load_object(m.group(1))
+        try:
+            return _load_object(m.group(1))
+        except json.JSONDecodeError:
+            pass
     # Strategy 3: find outermost { ... } block in free-form text
     start = stripped.find("{")
     end = stripped.rfind("}")

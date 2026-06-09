@@ -321,6 +321,7 @@ def write_trial_log(run_dir: Path, idx: int, trial: Trial, result: TrialResult,
             "max_depth": trial.max_depth,
             "max_results": trial.max_results,
             "confidence_threshold": CONFIDENCE_THRESHOLD,
+            "verify_destination": trial.verify_destination,
         },
         "result": {
             "found": result.found,
