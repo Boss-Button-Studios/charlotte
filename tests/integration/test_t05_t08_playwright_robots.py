@@ -12,12 +12,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl
 from charlotte.core.fetcher import FetchResult, PageFetcher
-from charlotte.models import CrawlComplete, CrawlResult, PageSkipped
+from charlotte.models import CrawlComplete, PageSkipped
 
 from tests.integration.conftest import collect, nav, page, seq
 

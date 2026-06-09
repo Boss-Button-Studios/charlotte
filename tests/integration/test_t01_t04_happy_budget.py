@@ -10,13 +10,12 @@ T-04  Goal not found within max_depth (depth limit)
 from __future__ import annotations
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl
-from charlotte.models import BudgetExhausted, CrawlResult, ResultFound
+from charlotte.models import BudgetExhausted, CrawlResult
 
-from tests.integration.conftest import BODY, collect, nav, page, seq
+from tests.integration.conftest import collect, nav, page, seq
 
 _BASE = "http://example.com"
 _START = f"{_BASE}/"

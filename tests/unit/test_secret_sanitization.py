@@ -9,7 +9,6 @@ All groq SDK calls are mocked — the groq package is an optional dependency.
 
 from __future__ import annotations
 
-import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 

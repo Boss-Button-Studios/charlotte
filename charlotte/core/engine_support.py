@@ -23,7 +23,6 @@ from charlotte.models import (
 
 if TYPE_CHECKING:
     from charlotte.models import (
-        Candidate,
         FailureMode,
         GoalContext,
         ResultContent,

@@ -44,7 +44,6 @@ from charlotte.models import (
     CrawlComplete,
     CrawlResult,
     CrawlStarted,
-    ModelDecision,
     PageFetched,
     PageSkipped,
     ResultFound,

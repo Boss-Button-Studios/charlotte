@@ -12,7 +12,6 @@ T-18  Redirect chain exceeding 5 hops — CharlotteRedirectError, page skipped
 from __future__ import annotations
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl

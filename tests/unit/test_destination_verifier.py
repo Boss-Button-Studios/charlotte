@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
@@ -18,7 +17,7 @@ from charlotte.core.destination_verifier import (
     _has_password_form,
     _is_login_wall_redirect,
 )
-from charlotte.models import GoalContext, ResultContent, VerificationResult
+from charlotte.models import GoalContext, ResultContent
 
 # ---------------------------------------------------------------------------
 # Test data

@@ -12,13 +12,12 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl
 from charlotte.models import CrawlComplete, PageSkipped, ResultFound
 
-from tests.integration.conftest import BODY, collect, nav, page, seq
+from tests.integration.conftest import collect, nav, page, seq
 
 _BASE = "http://example.com"
 _START = f"{_BASE}/"

@@ -216,7 +216,7 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
                                        "http_status": event.http_status, "fetch_ms": event.fetch_ms})
 
             elif isinstance(event, ModelEvaluating):
-                print(f"         thinking...", flush=True)
+                print("         thinking...", flush=True)
 
             elif isinstance(event, ModelDecision):
                 result.events.append({"type": "ModelDecision", "elapsed_ms": elapsed_ms,
@@ -346,7 +346,6 @@ def _tag_str(tags: list[str]) -> str:
 
 def print_summary_table(results: list[TrialResult]) -> None:
     col_name  = max(len(r.name)   for r in results)
-    col_goal  = min(max(len(r.goal) for r in results), 52)
 
     header = (
         f"  {'NAME':<{col_name}}  {'STATUS':<6}  {'PGS':>3}  {'MS':>7}  "
@@ -432,7 +431,7 @@ async def main() -> None:
         )
         print()
 
-        log_path = write_trial_log(run_dir, idx, trial, result, adapter._model)
+        write_trial_log(run_dir, idx, trial, result, adapter._model)
         results.append(result)
 
         if idx < len(trials):

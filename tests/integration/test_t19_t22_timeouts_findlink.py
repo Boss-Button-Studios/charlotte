@@ -12,13 +12,12 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-import pytest
 import respx
 
 from charlotte.core.engine import crawl
 from charlotte.core.find_link import find_link
 from charlotte.exceptions import CharlotteTimeoutError
-from charlotte.models import CrawlComplete, LinkResult, PageSkipped, ResultFound
+from charlotte.models import CrawlComplete, LinkResult, PageSkipped
 
 from tests.integration.conftest import collect, nav, page, seq
 
