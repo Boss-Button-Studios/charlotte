@@ -33,8 +33,12 @@ from charlotte import crawl
 from charlotte.adapters.local import LocalAdapter
 from charlotte.models import (
     BudgetExhausted,
+    CandidatesExtracted,
     CrawlComplete,
     CrawlStarted,
+    DestinationVerificationFailed,
+    GoalPreprocessed,
+    LinksRanked,
     ModelDecision,
     ModelEvaluating,
     PageFetched,
@@ -67,6 +71,7 @@ class Trial:
     max_depth: int = 3
     max_results: int | None = 1
     tags: list[str] = field(default_factory=list)
+    verify_destination: str = "relevance"  # default matches crawl()
 
 
 # What makes a good trial
@@ -201,6 +206,7 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
             confidence_threshold=CONFIDENCE_THRESHOLD,
             stream=True,
             default_delay=1.0,
+            verify_destination=trial.verify_destination,
         )
 
         async for event in gen:
@@ -209,6 +215,34 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
             if isinstance(event, CrawlStarted):
                 result.events.append({"type": "CrawlStarted", "elapsed_ms": elapsed_ms,
                                        "max_pages": event.max_pages, "max_depth": event.max_depth})
+
+            elif isinstance(event, GoalPreprocessed):
+                ctx = event.goal_context
+                result.events.append({"type": "GoalPreprocessed", "elapsed_ms": elapsed_ms,
+                                       "duration_ms": event.duration_ms, "source": event.source,
+                                       "goal_type": ctx.goal_type,
+                                       "goal_type_confidence": ctx.goal_type_confidence,
+                                       "anchor_terms": ctx.anchor_terms})
+
+            elif isinstance(event, LinksRanked):
+                result.events.append({"type": "LinksRanked", "elapsed_ms": elapsed_ms,
+                                       "page_url": event.page_url, "total_links": event.total_links,
+                                       "duration_ms": event.duration_ms,
+                                       "top_links": [{"url": lk.url, "text": lk.text, "score": lk.score}
+                                                      for lk in event.top_links[:3]]})
+
+            elif isinstance(event, CandidatesExtracted):
+                result.events.append({"type": "CandidatesExtracted", "elapsed_ms": elapsed_ms,
+                                       "page_url": event.page_url,
+                                       "candidate_count": len(event.candidates),
+                                       "duration_ms": event.duration_ms})
+
+            elif isinstance(event, DestinationVerificationFailed):
+                print(f"         verifier rejected {event.url}"
+                      f"  score={event.result.score}  reason={event.result.reason}", flush=True)
+                result.events.append({"type": "DestinationVerificationFailed", "elapsed_ms": elapsed_ms,
+                                       "url": event.url, "mode": event.result.mode,
+                                       "score": event.result.score, "reason": event.result.reason})
 
             elif isinstance(event, PageFetched):
                 result.events.append({"type": "PageFetched", "elapsed_ms": elapsed_ms,
@@ -256,7 +290,9 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
                                        "found": event.found, "result_count": event.result_count,
                                        "pages_visited": event.pages_visited,
                                        "depth_reached": event.depth_reached,
-                                       "crawl_elapsed_ms": event.elapsed_ms})
+                                       "crawl_elapsed_ms": event.elapsed_ms,
+                                       "failure_mode": event.failure_mode.value if event.failure_mode else None,
+                                       "failure_reason": event.failure_reason})
 
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
