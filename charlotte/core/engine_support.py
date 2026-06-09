@@ -12,7 +12,7 @@ from time import monotonic
 from typing import TYPE_CHECKING
 
 from charlotte.core.provenance import check_provenance
-from charlotte.exceptions import CharlotteInternalError
+from charlotte.exceptions import CharlotteError, CharlotteInternalError
 from charlotte.models import (
     CrawlResult,
     LinksRanked,
@@ -97,10 +97,11 @@ def _make_links_ranked(
 
 
 async def _run_extractor(extractor, goal_context: "GoalContext", page, locale: str) -> list:
-    """Call the candidate extractor, returning [] on unexpected errors."""
+    """Call the candidate extractor. CharlotteErrors are logged and return []; others propagate."""
     try:
         return await extractor(goal_context=goal_context, page=page, locale=locale)
-    except Exception:
+    except CharlotteError:
+        logger.exception("Candidate extractor failed (goal_type=%s, locale=%s)", goal_context.goal_type, locale)
         return []
 
 
@@ -109,10 +110,11 @@ async def _verify_candidate(
     url: str,
     goal_context: "GoalContext",
 ) -> tuple[VerificationResult, "ResultContent | None"]:
-    """Call the destination verifier, absorbing unexpected errors as a rejection."""
+    """Call the destination verifier. CharlotteErrors are logged and return a rejection; others propagate."""
     try:
         return await verifier(url=url, goal_context=goal_context)
-    except Exception as exc:
+    except CharlotteError as exc:
+        logger.exception("Destination verifier failed for %r", url)
         return (
             VerificationResult(
                 url=url, passed=False, mode="existence", score=None,

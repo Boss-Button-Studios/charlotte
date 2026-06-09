@@ -362,7 +362,12 @@ async def _crawl_core(
         _rl = _rank_links(ranker, goal_context, extracted.links)
         _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
         ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
-        score_map = {normalize_url(u): s for u, s in _rl}
+        score_map = {}
+        for _u, _s in _rl:
+            try:
+                score_map[normalize_url(_u)] = _s
+            except CharlotteConfigError:
+                continue
         yield _make_links_ranked(page.url, _rl, _url_to_link, _elapsed_ms(rank_t0))
 
         ext_t0 = monotonic()
@@ -414,7 +419,12 @@ async def _crawl_core(
                     _rl = _rank_links(ranker, goal_context, extracted.links)
                     _url_to_link = {lnk["url"]: lnk for lnk in extracted.links}
                     ranked_links = [_url_to_link[u] for u, _ in _rl if u in _url_to_link]
-                    score_map = {normalize_url(u): s for u, s in _rl}
+                    score_map = {}
+                    for _u, _s in _rl:
+                        try:
+                            score_map[normalize_url(_u)] = _s
+                        except CharlotteConfigError:
+                            continue
                     history = [e.url for e in visit_log[-10:]] + [page.url]
                     yield ModelEvaluating(url=page.url)
                     output = await call_with_validation(

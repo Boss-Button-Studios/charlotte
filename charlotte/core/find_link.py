@@ -2,8 +2,10 @@
 find_link() — thin wrapper around crawl() for link discovery (CHAR-014).
 
 find_link() differs from crawl() in two ways: it always collects all matching
-links (max_results=None) and never returns page content (return_content=False).
-The underlying crawl and event stream are identical to crawl(). See spec §5.2.
+links (max_results=None) and never returns per-page crawl content
+(return_content=False). When destination verification content capture is
+enabled, LinkResult.result_content may be populated from the first verified
+result. The event stream is identical to crawl(). See spec §5.2.
 """
 
 from __future__ import annotations
@@ -76,57 +78,55 @@ def find_link(
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
-    A thin wrapper around crawl() with find_link()-specific defaults:
+    Thin wrapper around crawl() with find_link()-specific defaults:
     max_results=None (collect every matching link) and return_content=False
-    (always — use crawl() directly if you need page text). The event stream
-    is identical to crawl(). See spec §5.2.
+    (use crawl() directly if you need page text). When verification content
+    capture is enabled, LinkResult.result_content is populated from the first
+    verified result. The event stream is identical to crawl(). See spec §5.2.
 
     Args:
         start_url:            Absolute URL at which to begin.
         goal:                 Natural language description of what to find.
         model:                Adapter callable. None resolves via
                               CHARLOTTE_DEFAULT_ADAPTER (default: GroqAdapter).
-                              Raises CharlotteConfigError if the resolved adapter
-                              cannot be configured (e.g. missing GROQ_API_KEY).
+                              Raises CharlotteConfigError if unconfigurable.
         max_pages:            Hard ceiling on total pages fetched.
         max_depth:            Maximum link-hops from start_url.
         confidence_threshold: Minimum model confidence to record a result (0–1).
         render_js:            Use Playwright (headless Chromium) to render pages.
-                              Raises CharlotteConfigError if playwright not installed.
         allowed_domains:      Hostnames Charlotte may visit; defaults to start_url domain.
         navigation_hint:      Extra context passed to the model alongside the goal.
-        stream:               True → return AsyncGenerator of events.
-                              False → return coroutine resolving to LinkResult.
+        stream:               True → AsyncGenerator; False → Coroutine[LinkResult];
                               None → read CHARLOTTE_STREAM (default: True).
         respect_robots:       True/False overrides CHARLOTTE_RESPECT_ROBOTS.
-                              None → read CHARLOTTE_RESPECT_ROBOTS (default: True).
-        connect_timeout:      TCP connection timeout for HTTP requests (seconds).
-        read_timeout:         Response body read timeout (seconds).
-        render_timeout:       Seconds to wait for JS to settle after navigation (seconds).
+        connect_timeout:      TCP connection timeout in seconds.
+        read_timeout:         Response body read timeout in seconds.
+        render_timeout:       Seconds to wait for JS to settle after navigation.
         default_delay:        Floor for the polite inter-request delay (seconds).
-        chromium_executable:  Path to a Chromium/Chrome binary, used only when
-                              render_js=True. Overrides Playwright's bundled
-                              Chromium — needed on OS versions Playwright
-                              doesn't yet package a bundled binary for.
+        chromium_executable:  Path to Chromium binary when render_js=True.
         max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
-        user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT env
-                              var, or the built-in default (charlotte-crawler/1.0).
-        preprocessor:         GoalPreprocessorProtocol instance used to extract
-                              anchor terms and classify the goal. None →
+        user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT.
+        preprocessor:         GoalPreprocessorProtocol instance. None →
                               DeterministicPreprocessor (no model calls).
-        ranker:               LinkRankerProtocol instance used to score and sort
-                              candidate links before the model call. None →
-                              BM25LinkRanker.
-        locale:               BCP 47 locale tag passed to the preprocessor (default:
-                              "en_US"). Affects stop-word filtering and goal
-                              classification in Phase B and later.
+        ranker:               LinkRankerProtocol instance. None → BM25LinkRanker.
+        locale:               BCP 47 locale tag for the preprocessor (default: en_US).
+        verify_destination:   Verification mode: "off", "existence", "relevance"
+                              (default), or "full". See spec §7.3.
+        verify_threshold:     BM25/embedding relevance threshold (default 0.3).
+                              Only used by "relevance" and "full" modes.
+        fetch_result_content: Capture response bytes per verified result.
+                              None (default) = on for document_link goals only.
+        max_result_bytes:     Maximum bytes captured per verified result (default 10 MB).
+        result_to_file:       Directory for file-based content delivery.
+                              When set, LinkResult.result_content.file_path is
+                              populated and .content is None. See spec §7.7.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
         Coroutine[LinkResult] when stream=False — use ``await find_link(...)``.
 
     Raises:
-        CharlotteConfigError: Invalid configuration (render_js=True, bad URL,
+        CharlotteConfigError: Invalid configuration (playwright absent, bad URL,
                               or no model provided).
     """
     _kwargs: dict[str, Any] = dict(
