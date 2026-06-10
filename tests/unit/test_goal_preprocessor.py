@@ -155,10 +155,27 @@ def test_goal_type_no_hours_inside_behaviours():
 
 def test_anchor_terms_are_normalized_tokens():
     ctx = _PREPROCESSOR("Find the Python downloads page", None, "en_US")
-    # Stop words ("find", "the") should be removed; remaining tokens normalized.
+    # Stop words ("find", "the", "page") should be removed; remaining tokens normalized.
     assert "python" in ctx.anchor_terms
     assert "downloads" in ctx.anchor_terms
-    assert "page" in ctx.anchor_terms
+    assert "page" not in ctx.anchor_terms
+
+
+def test_anchor_terms_navigation_prose_removed():
+    """page/site/web/section are navigation prose, not goal discriminators."""
+    ctx = _PREPROCESSOR("Find the itertools module reference page", None, "en_US")
+    assert "page" not in ctx.anchor_terms
+    assert "itertools" in ctx.anchor_terms
+    assert "module" in ctx.anchor_terms
+    assert "reference" in ctx.anchor_terms
+
+
+def test_anchor_terms_site_web_section_removed():
+    ctx = _PREPROCESSOR("Find the web section for site membership", None, "en_US")
+    assert "web" not in ctx.anchor_terms
+    assert "section" not in ctx.anchor_terms
+    assert "site" not in ctx.anchor_terms
+    assert "membership" in ctx.anchor_terms
 
 
 def test_anchor_terms_stop_words_removed():

@@ -16,12 +16,37 @@ scoring so both sides use the same canonical form (T-69).
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
-from charlotte.core.text_normalization import tokenize
+from charlotte.core.text_normalization import normalize_text, tokenize
 
 if TYPE_CHECKING:
     from charlotte.models import GoalContext
+
+# File extensions and URL structural noise that carry no semantic signal.
+_URL_SEP_RE = re.compile(r"[/\-_.]")
+_URL_EXT_SKIP = frozenset({
+    "", "html", "htm", "xhtml", "php", "asp", "aspx", "jsp",
+    "xml", "json", "pdf", "rss", "atom",
+})
+
+
+def _url_path_tokens(url: str) -> list[str]:
+    """Return normalized tokens from the URL path for BM25 corpus augmentation.
+
+    Including path segments alongside anchor text lets the ranker reward links
+    like ``library/functools.html`` for the query term ``functools`` even when
+    the anchor text uses only generic phrasing (e.g. "Higher-order functions").
+    """
+    path = urlsplit(url).path
+    tokens = []
+    for part in _URL_SEP_RE.split(path):
+        tok = normalize_text(part)
+        if tok and tok not in _URL_EXT_SKIP and len(tok) > 1:
+            tokens.append(tok)
+    return tokens
 
 # ---------------------------------------------------------------------------
 # Protocol
@@ -73,10 +98,14 @@ class BM25LinkRanker:
 
         from rank_bm25 import BM25Okapi
 
-        # Build corpus — use a sentinel token for empty anchor text so BM25Okapi
-        # never receives an empty token list (which raises ValueError).
+        # Build corpus — anchor text tokens + URL path tokens.  URL path tokens
+        # let the ranker reward links whose path matches goal terms even when the
+        # anchor text is generic (e.g. "library/functools.html" for a functools
+        # query).  Use a sentinel token for empty documents so BM25Okapi never
+        # receives an empty token list (which raises ValueError).
         corpus = [
-            tokenize(lnk.get("text", "")) or ["__empty__"]
+            (tokenize(lnk.get("text", "")) + _url_path_tokens(lnk.get("url", "")))
+            or ["__empty__"]
             for lnk in links
         ]
 

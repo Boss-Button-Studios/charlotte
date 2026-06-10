@@ -91,6 +91,7 @@ Rules:
 - Do NOT substitute clearly wrong information. If the goal asks for an emergency room number and only a general hospital line is listed, set found=false — those are different things. But do not require explicit labeling: a phone number in the main body of a department's own page is that department's number even without a label. Set found=true with your actual confidence.
 - Do NOT add any URL from "Previously visited pages" to links_to_follow — those pages have already been evaluated. Do not add the current page URL to links_to_follow either.
 - When the goal involves finding a specific category of content (doctors by specialty, products by type, articles by topic), follow directory, index, or category links that could lead to that category — even if the match is indirect (e.g. "Specialists" → "Respiratory" → respiratory doctors).
+- When found=false, links_to_follow must NOT be empty if any link on this page could plausibly lead toward the goal. This applies especially on index, listing, or hub pages: if you can see a link that clearly heads toward the goal target, put it in links_to_follow even though you haven't visited it yet. Return an empty links_to_follow ONLY when you have genuinely exhausted all promising paths or the goal is clearly unachievable on this site.
 - Respond with JSON only. No prose outside the JSON object.\
 """
 

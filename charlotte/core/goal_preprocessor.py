@@ -56,6 +56,10 @@ _STOP_WORDS: frozenset[str] = frozenset({
     "this", "that", "these", "those", "and", "or", "but", "if", "not",
     "no", "nor", "so", "yet", "just", "how", "what", "where", "when",
     "who", "which", "find", "get", "go", "look", "search",
+    # Navigation prose — these describe the type of thing we're looking for,
+    # not the thing itself.  High IDF in anchor-text corpora causes noise links
+    # like "Search page" to outscore genuinely relevant links.
+    "page", "site", "web", "section",
 })
 
 # ---------------------------------------------------------------------------
