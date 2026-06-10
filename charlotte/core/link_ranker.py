@@ -104,7 +104,7 @@ class BM25LinkRanker:
         # query).  Use a sentinel token for empty documents so BM25Okapi never
         # receives an empty token list (which raises ValueError).
         corpus = [
-            (tokenize(lnk.get("text", "")) + _url_path_tokens(lnk.get("url", "")))
+            (tokenize(lnk.get("text", "")) + _url_path_tokens(lnk.get("url") or ""))
             or ["__empty__"]
             for lnk in links
         ]
