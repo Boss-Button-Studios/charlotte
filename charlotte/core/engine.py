@@ -28,7 +28,7 @@ from charlotte.core.engine_support import (
 )
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
-from charlotte.core.goal_preprocessor import AutoPreprocessor, DeterministicPreprocessor
+from charlotte.core.goal_preprocessor import AutoPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility

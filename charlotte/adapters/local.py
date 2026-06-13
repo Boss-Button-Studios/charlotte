@@ -194,7 +194,11 @@ _EXPLICIT_MARKERS: tuple[str, ...] = (
     "explicitly mentioned",
     "is the correct answer",
     "correct answer to the goal",
-    "is explicitly",        # catches "answer is explicitly X"
+    "answer is explicitly",  # specific enough to avoid negation matches
+)
+# Guard against "not explicitly stated", "isn't explicitly provided", etc.
+_NEGATED_EXPLICIT_RE = re.compile(
+    r"\b(?:not|isn't|is not|never)\s+explicitly\b", re.IGNORECASE
 )
 # Matches Python dotted names: json.loads(), functools.cache, @functools.cache
 _PYTHON_DOTTED_RE = re.compile(
@@ -213,12 +217,19 @@ def _rescue_found_from_reasoning(data: dict) -> dict:
     """
     if data.get("found"):
         return data
-    if (data.get("confidence") or 0.0) < 0.80:
+    try:
+        conf = float(data.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < 0.80:
         return data
     reasoning_lower = (data.get("reasoning") or "").lower()
+    if _NEGATED_EXPLICIT_RE.search(reasoning_lower):
+        return data
     if not any(marker in reasoning_lower for marker in _EXPLICIT_MARKERS):
         return data
     data["found"] = True
+    data["__charlotte_rescued_found"] = True
     if data.get("answer") is None:
         match = _PYTHON_DOTTED_RE.search(data.get("reasoning") or "")
         if match:
@@ -383,8 +394,8 @@ class LocalAdapter:
         )
         # Rescue can flip found=True without setting result_url (it has no page URL
         # context). validate_adapter_output rejects found=True with null result_url,
-        # causing a retry that undoes the rescue. Backfill with the current page URL.
-        if raw.get("found") and raw.get("result_url") is None:
+        # causing a retry that undoes the rescue. Backfill only when rescue fired.
+        if raw.pop("__charlotte_rescued_found", False) and raw.get("result_url") is None:
             raw["result_url"] = page_url
         return raw
 

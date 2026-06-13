@@ -169,7 +169,7 @@ class BM25LinkRanker:
         query_set = set(query)
         scores = [
             _coverage_score(
-                _anchor_tokens(lnk.get("text", "")) + _url_path_tokens(lnk.get("url") or ""),
+                _anchor_tokens(lnk.get("text") or "") + _url_path_tokens(lnk.get("url") or ""),
                 query_set,
                 self._K1,
             )

@@ -610,6 +610,28 @@ def test_rescue_found_triggers_on_past_tense_described():
     assert result["answer"] == "json.loads"
 
 
+def test_rescue_found_negation_guard_suppresses_flip():
+    """'not explicitly stated' must NOT trigger rescue even with high confidence."""
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The answer is not explicitly stated on this page.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_string_confidence_does_not_raise():
+    """Model returning confidence as a string must not raise TypeError."""
+    data = {
+        "found": False, "confidence": "0.95",
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+
+
 @respx.mock
 @pytest.mark.anyio
 async def test_call_backfills_result_url_when_rescue_fires():

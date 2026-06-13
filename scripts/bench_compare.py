@@ -71,7 +71,7 @@ def main() -> None:
     label_b = curr.get("label", Path(sys.argv[2]).stem)
 
     print()
-    print(f"  charlotte benchmark comparison")
+    print("  charlotte benchmark comparison")
     print(f"  baseline : {label_a}  (charlotte {base.get('charlotte_version','?')})")
     print(f"           : endpoint {base.get('adapter_endpoint','?')}")
     print(f"  current  : {label_b}  (charlotte {curr.get('charlotte_version','?')})")
@@ -80,10 +80,6 @@ def main() -> None:
     print()
 
     # ── per-trial table ──────────────────────────────────────────────────────
-    col = f"{'':>{_W}}  {'STATUS':>8}  {'PAGES':>10}  {'MS':>16}"
-    header_a = f"{'':>{_W}}  {'──BASELINE──':>8}  {'──BASELINE──':>10}  {'──BASELINE──':>16}"
-    header_b = f"{'':>{_W}}  {'──CURRENT──':>8}  {'──CURRENT──':>10}  {'──CURRENT──':>16}"
-
     sep = "  " + "─" * (_W + 2 + 8 + 2 + 10 + 2 + 16)
 
     print(f"  {'TRIAL':<{_W}}  {'─PASS─':>8}  {'─PAGES─':>10}  {'─ELAPSED ms─':>16}")
