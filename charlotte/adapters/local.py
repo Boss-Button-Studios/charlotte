@@ -1,15 +1,21 @@
 """
-LocalAdapter — calls any OpenAI-compatible local inference endpoint.
+LocalAdapter — calls the Ollama native chat API.
 
 Defaults to Ollama at http://localhost:11434 with DeepSeek R1 14B.
 No API key required. Uses httpx (already in Charlotte's core dependencies),
 so no additional package is needed to use this adapter.
 
-Compatible with Ollama, LM Studio, llama.cpp server, text-generation-webui,
-or any other server implementing the OpenAI Chat Completions API.
+Uses the Ollama native ``/api/chat`` endpoint (not the OpenAI-compatible
+``/v1/chat/completions`` path).  The native endpoint is required because:
 
-This is a fully supported production path — not a development-only tool.
-Choose between GroqAdapter and LocalAdapter based on your deployment context.
+  * ``options.num_ctx`` sets the inference context window — without it,
+    Ollama's default (2 048–4 096 tokens) is too small for pages with full
+    text (up to 16 KB) and causes HTTP 400 on the OpenAI endpoint.
+  * ``format: "json"`` enforces grammar-based JSON output at the GGUF level;
+    the OpenAI endpoint's ``response_format`` is silently ignored for many
+    models in Ollama 0.30+.
+
+For cloud-hosted models, use GroqAdapter instead.
 
 Environment variables:
     CHARLOTTE_LOCAL_BASE_URL — base URL for the inference server
@@ -50,9 +56,23 @@ _LONE_CLOSE_THINK_RE = re.compile(r"^.*?</think(?:ing)?>", re.DOTALL | re.IGNORE
 # US phone number formats: 858-966-5846, (858) 966-5846, 858.966.5846, 858 966 5846
 _PHONE_RE = re.compile(r'\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}')
 
+# Markdown JSON fence: ```json { ... } ``` or ``` { ... } ```
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+# Pages with full text (16 KB cap) plus many links can reach ~5 000 tokens.
+# 8 192 fits the largest expected prompts with headroom for the response.
+_OLLAMA_NUM_CTX = 8192
+
+# BM25 has already ranked links best-first, so only the top N matter for the
+# model's decision.  Index pages (e.g. library/index.html, py-modindex.html)
+# can have 200–800+ links; sending all of them blows the context window and
+# causes HTTP 400 or truncated JSON.  30 is enough to surface the right path
+# while keeping the link section under ~600 tokens.
+_MAX_LINKS_IN_PROMPT = 30
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "deepseek-r1:14b"
-_COMPLETIONS_PATH = "/v1/chat/completions"
+_CHAT_PATH = "/api/chat"
 
 _SYSTEM_PROMPT = """\
 You are a web navigation assistant. Given a web page and a navigation goal, you \
@@ -76,8 +96,13 @@ Rules:
 - "answer": copy the specific value verbatim — do not paraphrase or summarize. Use null when the goal is to find a page or link rather than a fact.
 - If your reasoning names a specific value that answers the goal (a phone number, address, price, name, or other fact), that exact value MUST also appear in "answer". Mentioning the value in "reasoning" but returning answer=null is an error.
 - Do NOT substitute clearly wrong information. If the goal asks for an emergency room number and only a general hospital line is listed, set found=false — those are different things. But do not require explicit labeling: a phone number in the main body of a department's own page is that department's number even without a label. Set found=true with your actual confidence.
+- "links_to_follow" must only contain URLs copied exactly from the <available_links> list. Do not modify, shorten, extend, or invent URLs — use the exact strings shown.
 - Do NOT add any URL from "Previously visited pages" to links_to_follow — those pages have already been evaluated. Do not add the current page URL to links_to_follow either.
 - When the goal involves finding a specific category of content (doctors by specialty, products by type, articles by topic), follow directory, index, or category links that could lead to that category — even if the match is indirect (e.g. "Specialists" → "Respiratory" → respiratory doctors).
+- When found=false, links_to_follow must NOT be empty if any link on this page could plausibly lead toward the goal. This applies especially on index, listing, or hub pages: if you can see a link that clearly heads toward the goal target, put it in links_to_follow even though you haven't visited it yet. Return an empty links_to_follow ONLY when you have genuinely exhausted all promising paths or the goal is clearly unachievable on this site.
+- When found=true, result_url must be set — either to the current page URL (when this page is the answer) or to a URL copied exactly from the <available_links> list. result_url may never be null when found=true.
+- If the page contains a specific value that directly answers the goal question (a function name, a count, a year, an author, a title), set found=true with that value in "answer". Do not keep searching when you can already answer the question.
+- Contradiction rule: if your "reasoning" says the answer is "explicitly described", "explicitly demonstrated", "explicitly stated", or otherwise directly present on this page, then found MUST be true. Stating that the answer is explicitly on the page while returning found=false is always self-contradictory and wrong.
 - Respond with JSON only. No prose outside the JSON object.\
 """
 
@@ -120,7 +145,7 @@ def _build_user_prompt(
     parts.append("Available links (text → URL, web-sourced):")
     parts.append("<available_links>")
     if available_links:
-        for link in available_links:
+        for link in available_links[:_MAX_LINKS_IN_PROMPT]:
             parts.append(f"  {link.get('text', '')} → {link.get('url', '')}")
     else:
         parts.append("(none)")
@@ -143,7 +168,73 @@ def _build_user_prompt(
     parts.append(f"Reminder — your goal is: {goal}")
     parts.append("Evaluate whether this page satisfies that goal, then decide which links to follow next.")
 
+    parts.append("")
+    parts.append(
+        "IMPORTANT: Your entire response must be a single JSON object with no surrounding text or markdown. "
+        "Do not include code fences, explanations, or any prose. Example:"
+    )
+    parts.append(
+        '{"found": false, "confidence": 0.1, "result_url": null, '
+        '"links_to_follow": ["https://example.com/next"], '
+        '"reasoning": "Not found here; following relevant link.", "answer": null}'
+    )
+
     return "\n".join(parts)
+
+
+_EXPLICIT_MARKERS: tuple[str, ...] = (
+    "explicitly describ",   # covers describes / described / describing
+    "explicitly demonstrat",  # covers demonstrates / demonstrated
+    "explicitly stat",      # covers states / stated
+    "explicitly shows",
+    "explicitly shown",
+    "explicitly provides",
+    "explicitly provided",
+    "explicitly listed",
+    "explicitly mentioned",
+    "is the correct answer",
+    "correct answer to the goal",
+    "answer is explicitly",  # specific enough to avoid negation matches
+)
+# Guard against "not explicitly stated", "isn't explicitly provided", etc.
+_NEGATED_EXPLICIT_RE = re.compile(
+    r"\b(?:not|isn't|is not|never)\s+explicitly\b", re.IGNORECASE
+)
+# Matches Python dotted names: json.loads(), functools.cache, @functools.cache
+_PYTHON_DOTTED_RE = re.compile(
+    r"(?:@|\b)([a-z_]\w*\.[a-z_]\w*(?:\(\))?)\b", re.IGNORECASE
+)
+
+
+def _rescue_found_from_reasoning(data: dict) -> dict:
+    """Flip found=False→True when high-confidence reasoning contradicts the decision.
+
+    DeepSeek-R1 sometimes identifies the answer in 'reasoning' but outputs
+    found=False, apparently seeking a more dedicated page.  When confidence is
+    high (≥0.80) and reasoning contains an explicit-presence marker, we treat
+    the model's own description as the authoritative signal and flip found.
+    A best-effort Python dotted-name rescue populates 'answer' when absent.
+    """
+    if data.get("found"):
+        return data
+    try:
+        conf = float(data.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < 0.80:
+        return data
+    reasoning_lower = (data.get("reasoning") or "").lower()
+    if _NEGATED_EXPLICIT_RE.search(reasoning_lower):
+        return data
+    if not any(marker in reasoning_lower for marker in _EXPLICIT_MARKERS):
+        return data
+    data["found"] = True
+    data["__charlotte_rescued_found"] = True
+    if data.get("answer") is None:
+        match = _PYTHON_DOTTED_RE.search(data.get("reasoning") or "")
+        if match:
+            data["answer"] = match.group(1)
+    return data
 
 
 def _rescue_answer_from_reasoning(data: dict) -> dict:
@@ -167,11 +258,49 @@ def _strip_think_tags(raw: str) -> str:
     return _LONE_CLOSE_THINK_RE.sub("", content).strip()
 
 
-class LocalAdapter:
-    """Navigator model adapter for any OpenAI-compatible local inference endpoint.
+def _parse_model_json(raw: str) -> dict:
+    """Parse model output to a dict, tolerating think tags and markdown code fences.
 
-    Targets the OpenAI Chat Completions API at ``{base_url}/v1/chat/completions``.
-    Works with Ollama, LM Studio, llama.cpp server, and any other compatible server.
+    deepseek-r1 and similar reasoning models sometimes wrap their JSON answer in
+    a markdown code fence (```json { ... } ```) rather than returning raw JSON.
+    Tries three strategies: direct parse, markdown-fence extraction, outermost-
+    brace extraction. Raises JSONDecodeError if none yield a JSON object (dict).
+    """
+    stripped = _strip_think_tags(raw)
+
+    def _load_object(candidate: str) -> dict:
+        parsed = json.loads(candidate)
+        if not isinstance(parsed, dict):
+            raise json.JSONDecodeError("expected JSON object, got non-dict", candidate, 0)
+        return parsed
+
+    # Strategy 1: direct parse (clean output, most models)
+    try:
+        return _load_object(stripped)
+    except json.JSONDecodeError:
+        pass
+    # Strategy 2: extract from markdown code fence
+    m = _JSON_FENCE_RE.search(stripped)
+    if m:
+        try:
+            return _load_object(m.group(1))
+        except json.JSONDecodeError:
+            pass
+    # Strategy 3: find outermost { ... } block in free-form text
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        return _load_object(stripped[start : end + 1])
+    raise json.JSONDecodeError("no JSON object found", stripped, 0)
+
+
+class LocalAdapter:
+    """Navigator model adapter for the Ollama native chat API.
+
+    Targets Ollama's ``/api/chat`` endpoint.  The native endpoint is required
+    over the OpenAI-compatible path because ``options.num_ctx`` (needed to
+    avoid HTTP 400 on large pages) and ``format: "json"`` (grammar-enforced
+    JSON output) are only reliably supported by the native API in Ollama 0.30+.
 
     No API key required. Uses httpx (already in Charlotte's core dependencies).
 
@@ -180,11 +309,11 @@ class LocalAdapter:
     controls the model host. See spec §6.3.
 
     Args:
-        base_url:   Base URL of the inference server. Constructor argument takes
+        base_url:   Base URL of the Ollama server. Constructor argument takes
                     precedence over ``CHARLOTTE_LOCAL_BASE_URL``.
-                    Default: ``http://localhost:11434`` (Ollama standard address).
-        model_name: Model name string passed to the API. Constructor argument takes
-                    precedence over ``CHARLOTTE_LOCAL_MODEL``.
+                    Default: ``http://localhost:11434``.
+        model_name: Model name string passed to the API. Constructor argument
+                    takes precedence over ``CHARLOTTE_LOCAL_MODEL``.
                     Default: ``deepseek-r1:14b``.
         timeout:    Total request timeout in seconds, or None for no timeout.
                     Local inference time is hardware-dependent and unbounded;
@@ -217,7 +346,7 @@ class LocalAdapter:
             )
 
         self._base_url = resolved_base
-        self._endpoint = resolved_base + _COMPLETIONS_PATH
+        self._endpoint = resolved_base + _CHAT_PATH
         self._model = model_name or os.environ.get("CHARLOTTE_LOCAL_MODEL", _DEFAULT_MODEL)
         self._timeout = timeout
         self._verbose = verbose
@@ -258,9 +387,17 @@ class LocalAdapter:
             schema_hint=schema_hint,
         )
 
-        if self._verbose:
-            return await self._call_streaming(user_prompt)
-        return await self._call_blocking(user_prompt)
+        raw = (
+            await self._call_streaming(user_prompt)
+            if self._verbose
+            else await self._call_blocking(user_prompt)
+        )
+        # Rescue can flip found=True without setting result_url (it has no page URL
+        # context). validate_adapter_output rejects found=True with null result_url,
+        # causing a retry that undoes the rescue. Backfill only when rescue fired.
+        if raw.pop("__charlotte_rescued_found", False) and raw.get("result_url") is None:
+            raw["result_url"] = page_url
+        return raw
 
     async def _call_blocking(self, user_prompt: str) -> dict[str, object]:
         """Non-streaming request — waits for the full response before returning."""
@@ -270,8 +407,9 @@ class LocalAdapter:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "format": "json",
             "stream": False,
+            "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
 
         try:
@@ -286,7 +424,7 @@ class LocalAdapter:
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except Exception as exc:
+        except httpx.RequestError as exc:
             logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
@@ -294,8 +432,8 @@ class LocalAdapter:
 
         try:
             data = response.json()
-            raw_content = data["choices"][0]["message"]["content"] or ""
-            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+            raw_content = data["message"]["content"] or ""
+            return _rescue_answer_from_reasoning(_rescue_found_from_reasoning(_parse_model_json(raw_content)))
         except json.JSONDecodeError:
             logger.debug("Local model response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None
@@ -311,8 +449,9 @@ class LocalAdapter:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "format": "json",
             "stream": True,
+            "options": {"num_ctx": _OLLAMA_NUM_CTX},
         }
 
         parts: list[str] = []
@@ -321,24 +460,19 @@ class LocalAdapter:
                 async with client.stream("POST", self._endpoint, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
+                        if not line:
                             continue
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
                         try:
-                            chunk = json.loads(data_str)
-                            token = (
-                                (chunk.get("choices") or [{}])[0]
-                                .get("delta", {})
-                                .get("content") or ""
-                            )
-                        except (json.JSONDecodeError, IndexError, KeyError):
+                            chunk = json.loads(line)
+                            token = chunk.get("message", {}).get("content") or ""
+                        except (json.JSONDecodeError, AttributeError):
                             continue
                         if token:
                             parts.append(token)
                             sys.stderr.write(token)
                             sys.stderr.flush()
+                        if chunk.get("done"):
+                            break
         except httpx.TimeoutException as exc:
             logger.debug("Local model call timed out", exc_info=True)
             raise CharlotteTimeoutError("Local model call timed out") from exc
@@ -347,7 +481,7 @@ class LocalAdapter:
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except Exception as exc:
+        except httpx.RequestError as exc:
             logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
@@ -358,7 +492,7 @@ class LocalAdapter:
 
         raw_content = "".join(parts)
         try:
-            return _rescue_answer_from_reasoning(json.loads(_strip_think_tags(raw_content)))
+            return _rescue_answer_from_reasoning(_rescue_found_from_reasoning(_parse_model_json(raw_content)))
         except json.JSONDecodeError:
             logger.debug("Local model streaming response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None

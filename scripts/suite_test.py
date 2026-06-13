@@ -6,8 +6,15 @@ multi-hop navigation. Every run lands in its own timestamped folder under
 crawl_logs/suites/, with one JSON log per trial and a _summary.json.
 
 Usage:
-    python3 suite_test.py                # run all trials
-    python3 suite_test.py wiki lz        # run trials whose name contains "wiki" or "lz"
+    python3 suite_test.py                  # run all trials
+    python3 suite_test.py --list           # show numbered trial list and exit
+    python3 suite_test.py 12              # run trial #12 by number
+    python3 suite_test.py 10-13           # run trials #10 through #13
+    python3 suite_test.py 10-13 lz        # combine numeric and name/tag filters
+    python3 suite_test.py iana lz        # run trials whose name or tag contains "iana" or "lz"
+
+Filters are OR'd: a trial is included if it matches any filter argument.
+Numeric and substring filters can be freely mixed.
 
 Env vars (same as crawl_test.py):
     CHARLOTTE_LOCAL_MODEL         — model name (default: llama3:8b)
@@ -33,8 +40,12 @@ from charlotte import crawl
 from charlotte.adapters.local import LocalAdapter
 from charlotte.models import (
     BudgetExhausted,
+    CandidatesExtracted,
     CrawlComplete,
     CrawlStarted,
+    DestinationVerificationFailed,
+    GoalPreprocessed,
+    LinksRanked,
     ModelDecision,
     ModelEvaluating,
     PageFetched,
@@ -67,6 +78,13 @@ class Trial:
     max_depth: int = 3
     max_results: int | None = 1
     tags: list[str] = field(default_factory=list)
+    verify_destination: str = "relevance"  # default matches crawl()
+    # Extra domains the crawler may follow beyond the start domain.  Used when
+    # the target is on a related subdomain (e.g. docs.python.org from python.org).
+    allowed_domains: list[str] | None = None
+    # When set, the result URL must contain this substring for the trial to pass.
+    # Prevents false positives where found=True but the wrong page was returned.
+    expected_url_contains: str | None = None
 
 
 # What makes a good trial
@@ -95,6 +113,7 @@ TRIALS: list[Trial] = [
         goal="Find the tutorial page for Python beginners",
         max_pages=5,
         tags=["navigation", "docs"],
+        expected_url_contains="tutorial",
     ),
     Trial(
         name="python_pep_index",
@@ -110,6 +129,7 @@ TRIALS: list[Trial] = [
         goal="Find the Python glossary page",
         max_pages=5,
         tags=["navigation", "docs"],
+        expected_url_contains="glossary",
     ),
     Trial(
         name="iana_about",
@@ -126,6 +146,9 @@ TRIALS: list[Trial] = [
         max_pages=3,
         max_depth=1,
         tags=["fact", "lz", "peps"],
+        # LZ trials land directly on the answer page; relevance check is redundant
+        # and fails when anchor_terms describe the sought value rather than the page.
+        verify_destination="existence",
     ),
     Trial(
         name="lz_pep8_title",
@@ -134,6 +157,7 @@ TRIALS: list[Trial] = [
         max_pages=3,
         max_depth=1,
         tags=["fact", "lz", "peps"],
+        verify_destination="existence",
     ),
     Trial(
         name="lz_iana_root_count",
@@ -142,6 +166,7 @@ TRIALS: list[Trial] = [
         max_pages=3,
         max_depth=1,
         tags=["fact", "lz", "iana"],
+        verify_destination="existence",
     ),
     # --- Multi-hop fact: navigate to the page, then extract ---
     Trial(
@@ -151,6 +176,7 @@ TRIALS: list[Trial] = [
         max_pages=3,
         max_depth=1,
         tags=["fact", "lz", "peps"],
+        verify_destination="existence",
     ),
     Trial(
         name="python_json_parse_fn",
@@ -159,6 +185,44 @@ TRIALS: list[Trial] = [
         max_pages=3,
         max_depth=1,
         tags=["fact", "lz", "docs"],
+        verify_destination="existence",
+    ),
+    # --- Deep navigation: target is 2-3 hops from start, many wrong links at each step ---
+    Trial(
+        name="nav_itertools_page",
+        url="https://docs.python.org/3/",
+        goal="Find the itertools module reference page",
+        max_pages=8,
+        max_depth=3,
+        tags=["navigation", "docs", "multi-hop"],
+        expected_url_contains="itertools",
+    ),
+    Trial(
+        name="nav_whatsnew_312",
+        url="https://docs.python.org/3/",
+        goal="Find the What's New in Python 3.12 page",
+        max_pages=6,
+        max_depth=3,
+        tags=["navigation", "docs", "multi-hop"],
+        expected_url_contains="3.12",
+    ),
+    Trial(
+        name="nav_iana_port_assignments",
+        url="https://www.iana.org/",
+        goal="Find the page listing service name and port number assignments",
+        max_pages=8,
+        max_depth=3,
+        tags=["navigation", "iana", "multi-hop"],
+        expected_url_contains="service-names-port-numbers",
+    ),
+    # --- Multi-hop fact: navigate 2-3 hops to the answer page, then extract ---
+    Trial(
+        name="mh_functools_cache",
+        url="https://docs.python.org/3/",
+        goal="What is the name of the functools function that caches a function's return values to avoid recomputing them?",
+        max_pages=8,
+        max_depth=3,
+        tags=["fact", "docs", "multi-hop"],
     ),
 ]
 
@@ -181,19 +245,29 @@ class TrialResult:
     elapsed_ms: int = 0
     budget_exhausted: bool = False
     error: str | None = None
+    expected_url_contains: str | None = None
     events: list[dict] = field(default_factory=list)
+
+    def passed(self) -> bool:
+        """True if the trial succeeded, including optional URL validation."""
+        if self.error or not self.found:
+            return False
+        if self.expected_url_contains and not (
+            self.result_url and self.expected_url_contains in self.result_url
+        ):
+            return False
+        return True
 
 
 async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
-    result = TrialResult(name=trial.name, url=trial.url, goal=trial.goal, tags=trial.tags)
+    result = TrialResult(name=trial.name, url=trial.url, goal=trial.goal, tags=trial.tags,
+                         expected_url_contains=trial.expected_url_contains)
     run_start = monotonic()
 
     answers_collected: list[str | None] = []
 
     try:
-        gen = crawl(
-            trial.url,
-            trial.goal,
+        crawl_kwargs: dict = dict(
             model=adapter,
             max_pages=trial.max_pages,
             max_depth=trial.max_depth,
@@ -201,7 +275,11 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
             confidence_threshold=CONFIDENCE_THRESHOLD,
             stream=True,
             default_delay=1.0,
+            verify_destination=trial.verify_destination,
         )
+        if trial.allowed_domains is not None:
+            crawl_kwargs["allowed_domains"] = trial.allowed_domains
+        gen = crawl(trial.url, trial.goal, **crawl_kwargs)
 
         async for event in gen:
             elapsed_ms = int((monotonic() - run_start) * 1000)
@@ -209,6 +287,34 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
             if isinstance(event, CrawlStarted):
                 result.events.append({"type": "CrawlStarted", "elapsed_ms": elapsed_ms,
                                        "max_pages": event.max_pages, "max_depth": event.max_depth})
+
+            elif isinstance(event, GoalPreprocessed):
+                ctx = event.goal_context
+                result.events.append({"type": "GoalPreprocessed", "elapsed_ms": elapsed_ms,
+                                       "duration_ms": event.duration_ms, "source": event.source,
+                                       "goal_type": ctx.goal_type if ctx else None,
+                                       "goal_type_confidence": ctx.goal_type_confidence if ctx else None,
+                                       "anchor_terms": ctx.anchor_terms if ctx else []})
+
+            elif isinstance(event, LinksRanked):
+                result.events.append({"type": "LinksRanked", "elapsed_ms": elapsed_ms,
+                                       "page_url": event.page_url, "total_links": event.total_links,
+                                       "duration_ms": event.duration_ms,
+                                       "top_links": [{"url": lk.url, "text": lk.text, "score": lk.score}
+                                                      for lk in event.top_links]})
+
+            elif isinstance(event, CandidatesExtracted):
+                result.events.append({"type": "CandidatesExtracted", "elapsed_ms": elapsed_ms,
+                                       "page_url": event.page_url,
+                                       "candidate_count": len(event.candidates),
+                                       "duration_ms": event.duration_ms})
+
+            elif isinstance(event, DestinationVerificationFailed):
+                print(f"         verifier rejected {event.url}"
+                      f"  score={event.result.score}  reason={event.result.reason}", flush=True)
+                result.events.append({"type": "DestinationVerificationFailed", "elapsed_ms": elapsed_ms,
+                                       "url": event.url, "mode": event.result.mode,
+                                       "score": event.result.score, "reason": event.result.reason})
 
             elif isinstance(event, PageFetched):
                 result.events.append({"type": "PageFetched", "elapsed_ms": elapsed_ms,
@@ -256,7 +362,9 @@ async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
                                        "found": event.found, "result_count": event.result_count,
                                        "pages_visited": event.pages_visited,
                                        "depth_reached": event.depth_reached,
-                                       "crawl_elapsed_ms": event.elapsed_ms})
+                                       "crawl_elapsed_ms": event.elapsed_ms,
+                                       "failure_mode": event.failure_mode.value if event.failure_mode else None,
+                                       "failure_reason": event.failure_reason})
 
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
@@ -285,6 +393,8 @@ def write_trial_log(run_dir: Path, idx: int, trial: Trial, result: TrialResult,
             "max_depth": trial.max_depth,
             "max_results": trial.max_results,
             "confidence_threshold": CONFIDENCE_THRESHOLD,
+            "verify_destination": trial.verify_destination,
+            "allowed_domains": trial.allowed_domains,
         },
         "result": {
             "found": result.found,
@@ -329,8 +439,8 @@ def write_summary(run_dir: Path, results: list[TrialResult], model_name: str,
         "confidence_threshold": CONFIDENCE_THRESHOLD,
         "suite_elapsed_ms": suite_elapsed_ms,
         "total": len(results),
-        "passed": sum(1 for r in results if r.found and not r.error),
-        "failed": sum(1 for r in results if not r.found and not r.error),
+        "passed": sum(1 for r in results if r.passed()),
+        "failed": sum(1 for r in results if not r.passed() and not r.error),
         "errored": sum(1 for r in results if r.error),
         "trials": trials_data,
     }
@@ -357,11 +467,20 @@ def print_summary_table(results: list[TrialResult]) -> None:
     print("  " + "─" * (len(header) - 2))
 
     for r in results:
-        status = "ERROR " if r.error else _STATUS[r.found]
+        if r.error:
+            status = "ERROR "
+        elif r.passed():
+            status = "PASS"
+        elif r.found:
+            status = "BADURL"  # found=True but URL validation failed
+        else:
+            status = "FAIL"
         if r.error:
             note = textwrap.shorten(r.error, width=60)
         elif r.answer:
             note = textwrap.shorten(r.answer, width=60)
+        elif r.found and not r.passed():
+            note = f"wrong url: {(r.result_url or '')[-50:]}"
         elif r.found:
             note = "(no answer — navigation goal)"
         elif r.budget_exhausted:
@@ -373,8 +492,8 @@ def print_summary_table(results: list[TrialResult]) -> None:
             f"{r.elapsed_ms:>7,}  {note}"
         )
 
-    passed  = sum(1 for r in results if r.found and not r.error)
-    failed  = sum(1 for r in results if not r.found and not r.error)
+    passed  = sum(1 for r in results if r.passed())
+    failed  = sum(1 for r in results if not r.passed() and not r.error)
     errored = sum(1 for r in results if r.error)
     print()
     print(f"  {passed} passed  {failed} failed  {errored} errored  ({len(results)} total)")
@@ -384,15 +503,74 @@ def print_summary_table(results: list[TrialResult]) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _print_trial_list() -> None:
+    """Print the numbered trial list and exit."""
+    print(f"  {'#':>3}  {'NAME':<30}  {'TAGS'}")
+    print("  " + "─" * 60)
+    for idx, trial in enumerate(TRIALS, 1):
+        print(f"  {idx:>3}  {trial.name:<30}  {_tag_str(trial.tags)}")
+    print()
+    print(f"  {len(TRIALS)} trials total")
+
+
+def _parse_args(args: list[str]) -> list[Trial]:
+    """Parse CLI arguments into a list of trials to run.
+
+    Numeric args (``12``, ``10-13``) select by 1-based position.
+    String args filter by substring match against trial name or tags.
+    Filters are OR'd; a trial is included if any filter matches.
+    """
+    if not args:
+        return list(TRIALS)
+
+    selected_indices: set[int] = set()
+    text_filters: list[str] = []
+
+    for arg in args:
+        arg_lower = arg.lower()
+        # Range: "10-13"
+        if "-" in arg and not arg.startswith("-"):
+            parts = arg.split("-", 1)
+            try:
+                lo, hi = int(parts[0]), int(parts[1])
+                selected_indices.update(range(lo, hi + 1))
+                continue
+            except ValueError:
+                pass
+        # Single number: "12"
+        try:
+            selected_indices.add(int(arg))
+            continue
+        except ValueError:
+            pass
+        # Substring filter against name / tags
+        text_filters.append(arg_lower)
+
+    trials: list[Trial] = []
+    for idx, trial in enumerate(TRIALS, 1):
+        by_number = idx in selected_indices
+        by_text = any(
+            f in trial.name or f in " ".join(trial.tags)
+            for f in text_filters
+        )
+        if by_number or by_text:
+            trials.append(trial)
+
+    return trials
+
+
 async def main() -> None:
-    filters = [a.lower() for a in sys.argv[1:]]
-    trials = (
-        [t for t in TRIALS if any(f in t.name or f in " ".join(t.tags) for f in filters)]
-        if filters else TRIALS
-    )
+    args = sys.argv[1:]
+
+    if "--list" in args:
+        _print_trial_list()
+        return
+
+    trials = _parse_args(args)
 
     if not trials:
-        print(f"No trials matched filters: {filters}")
+        print(f"No trials matched: {args}")
+        print("Run with --list to see available trials.")
         sys.exit(1)
 
     adapter = LocalAdapter(timeout=MODEL_TIMEOUT, verbose=MODEL_VERBOSE)
@@ -418,7 +596,14 @@ async def main() -> None:
 
         result = await run_trial(trial, adapter)
 
-        status = "ERROR " if result.error else _STATUS[result.found]
+        if result.error:
+            status = "ERROR "
+        elif result.passed():
+            status = "PASS"
+        elif result.found:
+            status = "BADURL"
+        else:
+            status = "FAIL"
         answer_line = (
             f"answer: {textwrap.shorten(result.answer, width=70)}"
             if result.answer else

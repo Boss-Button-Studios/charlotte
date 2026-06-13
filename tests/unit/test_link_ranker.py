@@ -151,3 +151,86 @@ def test_plan_smoke():
         {"text": "Community", "url": "https://python.org/community/"},
     ])
     assert ranked[0][0] == "https://python.org/downloads/"
+
+
+# ---------------------------------------------------------------------------
+# URL path token scoring
+# ---------------------------------------------------------------------------
+
+def test_url_path_tokens_boost_relevant_link():
+    """A link whose URL path matches the goal scores higher than a generic one
+    with matching anchor text when the goal term only appears in the path."""
+    ctx = _ctx("Find the functools module documentation")
+    links = [
+        # Anchor text is generic; goal term "functools" appears in the URL path.
+        {"text": "Higher-order functions and operations on callables",
+         "url": "https://docs.python.org/3/library/functools.html"},
+        # Anchor text matches "values" which isn't in the goal, URL is unrelated.
+        {"text": "Efficient arrays of numeric values",
+         "url": "https://docs.python.org/3/library/array.html"},
+    ]
+    ranked = _RANKER(ctx, links)
+    assert ranked[0][0] == "https://docs.python.org/3/library/functools.html", (
+        f"Expected functools first, got: {ranked}"
+    )
+
+
+def test_url_path_tokens_hyphenated_segments():
+    """Hyphenated URL path segments are split and de-pluralised so they match
+    singular goal terms.  Four links are used so BM25 IDF is non-zero.
+
+    Without de-pluralisation, ``auth-namespaces`` wins because its anchor text
+    contains ``name`` (a literal query term), while ``service-names-port-numbers``
+    has generic anchor text and URL tokens ``names``/``numbers`` that do not
+    exactly match the singular query terms ``name``/``number``.
+    """
+    ctx = _ctx("Find service name and port number page")
+    links = [
+        # Generic anchor text; goal terms appear only as plurals in the path.
+        {"text": "Protocol Registries",
+         "url": "https://www.iana.org/assignments/service-names-port-numbers/"},
+        # Anchor text contains "name" — the realistic false winner without
+        # de-pluralisation because "names" in the path never matched "name".
+        {"text": "Algorithm Name Space Values",
+         "url": "https://www.iana.org/assignments/auth-namespaces/"},
+        {"text": "Time Zones", "url": "https://www.iana.org/time-zones"},
+        {"text": "Root Zone Database", "url": "https://www.iana.org/domains/root/db"},
+    ]
+    ranked = _RANKER(ctx, links)
+    assert ranked[0][0] == "https://www.iana.org/assignments/service-names-port-numbers/", (
+        f"Expected port-numbers first, got: {ranked}"
+    )
+
+
+def test_url_path_tokens_emits_singular_alongside_plural():
+    """_url_path_tokens emits both the original plural and its de-pluralised form."""
+    from charlotte.core.link_ranker import _url_path_tokens
+
+    tokens = _url_path_tokens(
+        "https://www.iana.org/assignments/service-names-port-numbers/"
+    )
+    assert "names" in tokens, "original plural should be preserved"
+    assert "name" in tokens, "de-pluralised singular should also be emitted"
+    assert "numbers" in tokens, "original plural should be preserved"
+    assert "number" in tokens, "de-pluralised singular should also be emitted"
+
+
+def test_page_stop_word_does_not_boost_noise_link():
+    """'page' in the goal is a stop word and must not cause 'Search page' to
+    outscore a link whose anchor text matches the substantive goal terms.
+
+    BM25 IDF requires N >= 4 links to produce non-zero scores for rare terms,
+    so this test uses a realistic-sized corpus matching the homepage scenario.
+    """
+    ctx = _ctx("Find the itertools module reference page")
+    links = [
+        {"text": "Search page", "url": "https://docs.python.org/3/search.html"},
+        {"text": "Library reference", "url": "https://docs.python.org/3/library/index.html"},
+        {"text": "Tutorial", "url": "https://docs.python.org/3/tutorial/index.html"},
+        {"text": "What's new", "url": "https://docs.python.org/3/whatsnew/index.html"},
+        {"text": "FAQ", "url": "https://docs.python.org/3/faq/index.html"},
+    ]
+    ranked = _RANKER(ctx, links)
+    assert ranked[0][0] == "https://docs.python.org/3/library/index.html", (
+        f"Expected library/index first, got: {ranked}"
+    )

@@ -31,7 +31,7 @@ from charlotte.core.normalizer import normalize_url
 from charlotte.exceptions import CharlotteConfigError, CharlotteInternalError
 
 _DEFAULT_MAX_TEXT_CHARS: int = 16_384
-_DEFAULT_MAX_LINKS: int = 200
+_DEFAULT_MAX_LINKS: int = 5_000
 
 # HTML elements whose presence as an ancestor determines node priority.
 # Walking from the node up the tree, the first matching ancestor wins.

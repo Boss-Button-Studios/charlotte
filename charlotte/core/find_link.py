@@ -107,7 +107,9 @@ def find_link(
         max_response_bytes:   Maximum response body size in bytes (default: 10 MB).
         user_agent:           HTTP User-Agent header. None → CHARLOTTE_USER_AGENT.
         preprocessor:         GoalPreprocessorProtocol instance. None →
-                              DeterministicPreprocessor (no model calls).
+                              AutoPreprocessor (Deterministic for navigation
+                              goals; Hybrid with synonym expansion for fact
+                              goals).
         ranker:               LinkRankerProtocol instance. None → BM25LinkRanker.
         locale:               BCP 47 locale tag for the preprocessor (default: en_US).
         verify_destination:   Verification mode: "off", "existence", "relevance"

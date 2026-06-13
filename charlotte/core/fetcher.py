@@ -118,7 +118,10 @@ class PageFetcher:
         return (urlsplit(url).hostname or "").lower()
 
     def _is_allowed(self, url: str) -> bool:
-        return self._hostname(url) in self._allowed_domains
+        host = self._hostname(url)
+        if host in self._allowed_domains:
+            return True
+        return any(host.endswith("." + d) for d in self._allowed_domains)
 
     async def fetch(
         self,

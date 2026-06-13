@@ -21,6 +21,7 @@ from charlotte.adapters.local import (
     _DEFAULT_BASE_URL,
     _DEFAULT_MODEL,
     _build_user_prompt,
+    _rescue_found_from_reasoning,
 )
 from charlotte.exceptions import AdapterOutputError, CharlotteConfigError, CharlotteTimeoutError
 
@@ -28,7 +29,7 @@ from charlotte.exceptions import AdapterOutputError, CharlotteConfigError, Charl
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-_ENDPOINT = f"{_DEFAULT_BASE_URL}/v1/chat/completions"
+_ENDPOINT = f"{_DEFAULT_BASE_URL}/api/chat"
 
 _VALID_NAV_DICT: dict = {
     "found": False,
@@ -51,9 +52,9 @@ _PAGE_CONTEXT: dict = dict(
 
 
 def _ok_response(nav_dict: dict | None = None) -> httpx.Response:
-    """Build a 200 httpx.Response carrying the given nav dict as model content."""
+    """Build a 200 httpx.Response carrying the given nav dict as model content (Ollama native format)."""
     content = json.dumps(nav_dict or _VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": content}}]}
+    body = {"message": {"content": content}, "done": True}
     return httpx.Response(200, json=body)
 
 
@@ -62,10 +63,10 @@ def _ok_response(nav_dict: dict | None = None) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 def test_default_endpoint(monkeypatch):
-    """Default endpoint is _DEFAULT_BASE_URL + /v1/chat/completions."""
+    """Default endpoint is _DEFAULT_BASE_URL + /api/chat (Ollama native)."""
     monkeypatch.delenv("CHARLOTTE_LOCAL_BASE_URL", raising=False)
     adapter = LocalAdapter()
-    assert adapter._endpoint == f"{_DEFAULT_BASE_URL}/v1/chat/completions"
+    assert adapter._endpoint == f"{_DEFAULT_BASE_URL}/api/chat"
 
 
 def test_default_model(monkeypatch):
@@ -83,7 +84,7 @@ def test_env_base_url(monkeypatch):
     """CHARLOTTE_LOCAL_BASE_URL sets the endpoint."""
     monkeypatch.setenv("CHARLOTTE_LOCAL_BASE_URL", "http://myserver:8080")
     adapter = LocalAdapter()
-    assert adapter._endpoint == "http://myserver:8080/v1/chat/completions"
+    assert adapter._endpoint == "http://myserver:8080/api/chat"
 
 
 def test_env_model(monkeypatch):
@@ -101,7 +102,7 @@ def test_explicit_base_url_overrides_env(monkeypatch):
     """Explicit base_url= takes precedence over CHARLOTTE_LOCAL_BASE_URL."""
     monkeypatch.setenv("CHARLOTTE_LOCAL_BASE_URL", "http://envserver:9999")
     adapter = LocalAdapter(base_url="http://argserver:8080")
-    assert adapter._endpoint == "http://argserver:8080/v1/chat/completions"
+    assert adapter._endpoint == "http://argserver:8080/api/chat"
 
 
 def test_explicit_model_name_overrides_env(monkeypatch):
@@ -118,7 +119,7 @@ def test_explicit_model_name_overrides_env(monkeypatch):
 def test_trailing_slash_stripped():
     """Trailing slash in base_url is stripped before appending the path."""
     adapter = LocalAdapter(base_url="http://localhost:11434/")
-    assert adapter._endpoint == "http://localhost:11434/v1/chat/completions"
+    assert adapter._endpoint == "http://localhost:11434/api/chat"
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +182,8 @@ async def test_request_sent_to_configured_endpoint():
 @respx.mock
 async def test_custom_base_url_uses_correct_endpoint():
     """A custom base_url targets the right endpoint."""
-    custom = "http://lmstudio:1234"
-    respx.post(f"{custom}/v1/chat/completions").mock(return_value=_ok_response())
+    custom = "http://myollama:1234"
+    respx.post(f"{custom}/api/chat").mock(return_value=_ok_response())
     result = await LocalAdapter(base_url=custom)(**_PAGE_CONTEXT)
     assert result["found"] is False
 
@@ -402,24 +403,24 @@ async def test_non_json_http_body_raises_adapter_output_error():
 @respx.mock
 async def test_non_json_model_content_raises_adapter_output_error():
     """Plain-text model content (not JSON) raises AdapterOutputError."""
-    body = {"choices": [{"message": {"content": "I cannot help with that."}}]}
+    body = {"message": {"content": "I cannot help with that."}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(AdapterOutputError, match="not valid JSON"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
 
 @respx.mock
-async def test_missing_choices_key_raises_adapter_output_error():
-    """Missing 'choices' key in response raises AdapterOutputError."""
+async def test_missing_message_key_raises_adapter_output_error():
+    """Missing 'message' key in Ollama response raises AdapterOutputError."""
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"result": "x"}))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
 
 @respx.mock
-async def test_empty_choices_list_raises_adapter_output_error():
-    """Empty 'choices' list raises AdapterOutputError."""
-    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"choices": []}))
+async def test_null_message_raises_adapter_output_error():
+    """Null 'message' value in response raises AdapterOutputError."""
+    respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json={"message": None}))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
 
@@ -427,7 +428,7 @@ async def test_empty_choices_list_raises_adapter_output_error():
 @respx.mock
 async def test_missing_content_key_raises_adapter_output_error():
     """Missing 'content' in message raises AdapterOutputError."""
-    body = {"choices": [{"message": {"role": "assistant"}}]}
+    body = {"message": {"role": "assistant"}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(AdapterOutputError, match="unexpected structure"):
         await LocalAdapter()(**_PAGE_CONTEXT)
@@ -441,7 +442,7 @@ async def test_missing_content_key_raises_adapter_output_error():
 async def test_think_tag_stripped_before_json_parse():
     """<think>...</think> block before JSON is stripped; valid JSON is returned."""
     raw = "<think>Let me reason about this step by step.</think>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -451,7 +452,7 @@ async def test_think_tag_stripped_before_json_parse():
 async def test_thinking_tag_variant_stripped():
     """<thinking>...</thinking> variant (some models use this form) is also stripped."""
     raw = "<thinking>Internal chain-of-thought here.</thinking>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -462,7 +463,7 @@ async def test_think_tag_multiline_stripped():
     """A multi-line <think> block is fully stripped regardless of newlines."""
     think_block = "<think>\nLine one.\nLine two.\nLine three.\n</think>\n"
     raw = think_block + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -472,7 +473,7 @@ async def test_think_tag_multiline_stripped():
 async def test_lone_close_think_tag_stripped():
     """A lone </think> separator (opening tag absent from content) is stripped."""
     raw = "Some reasoning text here.</think>\n" + json.dumps(_VALID_NAV_DICT)
-    body = {"choices": [{"message": {"content": raw}}]}
+    body = {"message": {"content": raw}, "done": True}
     respx.post(_ENDPOINT).mock(return_value=httpx.Response(200, json=body))
     result = await LocalAdapter()(**_PAGE_CONTEXT)
     assert result["found"] is False
@@ -531,3 +532,121 @@ def test_local_adapter_pickle_raises():
     adapter = LocalAdapter(base_url="http://localhost:11434")
     with pytest.raises(TypeError, match="pickled"):
         pickle.dumps(adapter)
+
+
+# ---------------------------------------------------------------------------
+# _rescue_found_from_reasoning
+# ---------------------------------------------------------------------------
+
+def test_rescue_found_flips_on_explicit_marker_high_confidence():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page explicitly demonstrates the use of json.loads() to parse JSON.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "json.loads"
+
+
+def test_rescue_found_extracts_dotted_name_from_reasoning():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page explicitly describes the @functools.cache decorator.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "functools.cache"
+
+
+def test_rescue_found_does_not_trigger_below_confidence_threshold():
+    data = {
+        "found": False, "confidence": 0.75,
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_does_not_trigger_without_explicit_marker():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page mentions the function but I want a better source.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_noop_when_already_true():
+    data = {"found": True, "confidence": 0.9, "reasoning": "Found it.", "answer": "Tim Peters"}
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "Tim Peters"
+
+
+def test_rescue_found_preserves_existing_answer():
+    data = {
+        "found": False, "confidence": 0.9,
+        "reasoning": "The page explicitly states the answer is 42.",
+        "answer": "42",
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "42"
+
+
+def test_rescue_found_triggers_on_past_tense_described():
+    """'explicitly described' (past tense) should match the stem-based marker."""
+    data = {
+        "found": False, "confidence": 1.0,
+        "reasoning": "The function json.loads() is explicitly described as the decoder for parsing JSON strings.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "json.loads"
+
+
+def test_rescue_found_negation_guard_suppresses_flip():
+    """'not explicitly stated' must NOT trigger rescue even with high confidence."""
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The answer is not explicitly stated on this page.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_string_confidence_does_not_raise():
+    """Model returning confidence as a string must not raise TypeError."""
+    data = {
+        "found": False, "confidence": "0.95",
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+
+
+@respx.mock
+@pytest.mark.anyio
+async def test_call_backfills_result_url_when_rescue_fires():
+    """When rescue flips found=True but result_url is None, __call__ sets result_url=page_url."""
+    # Model returns contradiction: found=False, high confidence, explicit marker
+    contradiction = {
+        "found": False,
+        "confidence": 0.95,
+        "result_url": None,
+        "links_to_follow": [],
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    respx.post(_ENDPOINT).mock(return_value=_ok_response(contradiction))
+    adapter = LocalAdapter()
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is True
+    assert result["result_url"] == _PAGE_CONTEXT["page_url"]
