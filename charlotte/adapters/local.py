@@ -424,7 +424,7 @@ class LocalAdapter:
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except Exception as exc:
+        except httpx.RequestError as exc:
             logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
@@ -481,7 +481,7 @@ class LocalAdapter:
             raise AdapterOutputError(
                 f"Local model endpoint returned HTTP {exc.response.status_code}"
             ) from None
-        except Exception as exc:
+        except httpx.RequestError as exc:
             logger.debug("Local model API call failed: %s", type(exc).__name__)
             raise AdapterOutputError(
                 "Local model API call failed — check that the server is running"
