@@ -164,8 +164,10 @@ INTER_TRIAL_DELAY = 2.0
 
 def _score_trial(trial: Trial, result: object) -> bool:
     """Return True if the result satisfies the trial's expectations."""
-    if not result.found:                                # type: ignore[union-attr]
+    if bool(result.found) != trial.expected_found:      # type: ignore[union-attr]
         return False
+    if not trial.expected_found:
+        return True
     if trial.answer_contains:
         answer = (result.answers or [None])[0]          # type: ignore[union-attr]
         if not answer:

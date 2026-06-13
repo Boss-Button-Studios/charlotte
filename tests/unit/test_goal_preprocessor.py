@@ -7,6 +7,7 @@ import pytest
 import respx
 
 from charlotte.core.goal_preprocessor import (
+    AutoPreprocessor,
     DeterministicPreprocessor,
     HybridPreprocessor,
     InMemoryGoalContextCache,
@@ -127,6 +128,42 @@ def test_goal_type_document_link_handbook():
 def test_goal_type_freeform_fact_hours():
     ctx = _PREPROCESSOR("What are the business hours?", None, "en_US")
     assert ctx.goal_type == "freeform_fact"
+
+
+def test_goal_type_freeform_fact_what_is_the_name():
+    ctx = _PREPROCESSOR("What is the name of the function used to parse a JSON string in Python?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_goal_type_freeform_fact_what_is_the():
+    ctx = _PREPROCESSOR("What is the default timeout for HTTP requests?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_goal_type_freeform_fact_what_does():
+    ctx = _PREPROCESSOR("What does the functools.cache decorator do?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_goal_type_freeform_fact_who_is():
+    ctx = _PREPROCESSOR("Who is the author of the Zen of Python?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_goal_type_freeform_fact_how_many():
+    ctx = _PREPROCESSOR("How many parameters does json.loads accept?", None, "en_US")
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_wh_fact_does_not_override_specific_type():
+    # "what is the price" — "price" single-word rule fires before "what is the"
+    ctx = _PREPROCESSOR("What is the price of a pro membership?", None, "en_US")
+    assert ctx.goal_type == "price_extraction"
+
+
+def test_wh_fact_does_not_override_date_type():
+    ctx = _PREPROCESSOR("What is the date of the next release?", None, "en_US")
+    assert ctx.goal_type == "date_extraction"
 
 
 # Edge cases — substring collisions that word-boundary matching must not trigger.
@@ -614,3 +651,51 @@ def test_hybrid_anchor_terms_fallback_to_tokenized_goal():
     ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
     assert ctx.source == "model"
     assert "python" in ctx.anchor_terms
+
+
+# ---------------------------------------------------------------------------
+# AutoPreprocessor
+# ---------------------------------------------------------------------------
+
+_FACT_HYBRID_OUTPUT = {
+    "goal_type": "freeform_fact",
+    "goal_type_confidence": 0.95,
+    "synonyms": {"parse": ["deserialize", "decode"], "function": ["method"]},
+    "anchor_terms": ["parse", "json", "function"],
+    "negative_terms": [],
+    "regex_hints": [],
+    "description": "Find the name of the function that parses JSON strings.",
+}
+
+
+def test_auto_navigation_goal_uses_deterministic():
+    # Navigation goals must not trigger a model call.
+    p = AutoPreprocessor()
+    ctx = p("Find the contact page", None, "en_US")
+    assert ctx.source == "deterministic"
+    assert ctx.goal_type == "navigation"
+
+
+@respx.mock
+def test_auto_fact_goal_escalates_to_hybrid():
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(_FACT_HYBRID_OUTPUT)))
+    p = AutoPreprocessor()
+    ctx = p("What is the name of the function used to parse a JSON string?", None, "en_US")
+    assert ctx.source == "model"
+    assert ctx.goal_type == "freeform_fact"
+    assert "deserialize" in ctx.synonyms.get("parse", [])
+
+
+@respx.mock
+def test_auto_fact_goal_falls_back_on_hybrid_failure():
+    # Hybrid returns garbage → falls back to deterministic result.
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=httpx.Response(500))
+    p = AutoPreprocessor()
+    ctx = p("What is the name of the function used to parse a JSON string?", None, "en_US")
+    assert ctx.source == "deterministic"
+    assert ctx.goal_type == "freeform_fact"
+
+
+def test_auto_model_id_matches_hybrid_model():
+    p = AutoPreprocessor()
+    assert p.model_id == p._hybrid.model_id

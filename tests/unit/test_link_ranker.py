@@ -176,18 +176,43 @@ def test_url_path_tokens_boost_relevant_link():
 
 
 def test_url_path_tokens_hyphenated_segments():
-    """Hyphenated URL path segments are split and each part scored independently."""
-    ctx = _ctx("Find service names and port numbers")
+    """Hyphenated URL path segments are split and de-pluralised so they match
+    singular goal terms.  Four links are used so BM25 IDF is non-zero.
+
+    Without de-pluralisation, ``auth-namespaces`` wins because its anchor text
+    contains ``name`` (a literal query term), while ``service-names-port-numbers``
+    has generic anchor text and URL tokens ``names``/``numbers`` that do not
+    exactly match the singular query terms ``name``/``number``.
+    """
+    ctx = _ctx("Find service name and port number page")
     links = [
+        # Generic anchor text; goal terms appear only as plurals in the path.
         {"text": "Protocol Registries",
          "url": "https://www.iana.org/assignments/service-names-port-numbers/"},
-        {"text": "Authentication Namespaces",
+        # Anchor text contains "name" — the realistic false winner without
+        # de-pluralisation because "names" in the path never matched "name".
+        {"text": "Algorithm Name Space Values",
          "url": "https://www.iana.org/assignments/auth-namespaces/"},
+        {"text": "Time Zones", "url": "https://www.iana.org/time-zones"},
+        {"text": "Root Zone Database", "url": "https://www.iana.org/domains/root/db"},
     ]
     ranked = _RANKER(ctx, links)
     assert ranked[0][0] == "https://www.iana.org/assignments/service-names-port-numbers/", (
         f"Expected port-numbers first, got: {ranked}"
     )
+
+
+def test_url_path_tokens_emits_singular_alongside_plural():
+    """_url_path_tokens emits both the original plural and its de-pluralised form."""
+    from charlotte.core.link_ranker import _url_path_tokens
+
+    tokens = _url_path_tokens(
+        "https://www.iana.org/assignments/service-names-port-numbers/"
+    )
+    assert "names" in tokens, "original plural should be preserved"
+    assert "name" in tokens, "de-pluralised singular should also be emitted"
+    assert "numbers" in tokens, "original plural should be preserved"
+    assert "number" in tokens, "de-pluralised singular should also be emitted"
 
 
 def test_page_stop_word_does_not_boost_noise_link():

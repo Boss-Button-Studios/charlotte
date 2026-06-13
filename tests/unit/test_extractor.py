@@ -257,14 +257,16 @@ def test_max_links_cap_applied():
     assert len(page.links) == 5
 
 
-def test_max_links_default_is_two_hundred():
-    """Default max_links is 200 -- pages with more anchors are capped at 200."""
+def test_max_links_default_caps_at_limit():
+    """Default max_links caps pages that exceed it; links within the limit pass through."""
+    from charlotte.core.extractor import _DEFAULT_MAX_LINKS
+    over = _DEFAULT_MAX_LINKS + 10
     hrefs = "".join(
         f'<a href="https://example.com/p{i}">Link {i}</a>'
-        for i in range(210)
+        for i in range(over)
     )
     page = extract(hrefs, _BASE)
-    assert len(page.links) == 200
+    assert len(page.links) == _DEFAULT_MAX_LINKS
 
 
 def test_max_links_zero_returns_empty():

@@ -14,7 +14,7 @@ from charlotte.core.candidate_extractor import (
 )
 from charlotte.core.engine import crawl
 from charlotte.core.find_link import find_link
-from charlotte.core.goal_preprocessor import DeterministicPreprocessor, HybridPreprocessor
+from charlotte.core.goal_preprocessor import AutoPreprocessor, DeterministicPreprocessor, HybridPreprocessor
 from charlotte.exceptions import (
     AdapterOutputError,
     CharlotteConfigError,
@@ -60,6 +60,7 @@ __all__ = [
     "crawl",
     "find_link",
     # Preprocessors
+    "AutoPreprocessor",
     "DeterministicPreprocessor",
     "HybridPreprocessor",
     # Candidate extractor

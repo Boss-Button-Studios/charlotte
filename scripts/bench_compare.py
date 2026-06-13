@@ -18,8 +18,26 @@ from pathlib import Path
 _W = 32  # trial name column width
 
 
+_REQUIRED_KEYS = frozenset({
+    "label", "charlotte_version", "adapter_endpoint", "run_at",
+    "passed", "total", "trials", "suite_elapsed_ms",
+})
+
+
 def _load(path: str) -> dict:
-    return json.loads(Path(path).read_text())
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: cannot read {path!r}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    missing = _REQUIRED_KEYS - data.keys()
+    if missing:
+        print(
+            f"error: {path!r} is missing required keys: {', '.join(sorted(missing))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return data
 
 
 def _pct(n: int, d: int) -> str:

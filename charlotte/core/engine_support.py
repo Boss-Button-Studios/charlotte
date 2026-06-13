@@ -83,10 +83,15 @@ def _make_links_ranked(
     url_to_link: dict,
     duration_ms: int,
 ) -> LinksRanked:
-    """Build a LinksRanked event from raw ranker output (capped at 10 entries)."""
+    """Build a LinksRanked event from raw ranker output (capped at 30 entries).
+
+    30 matches _MAX_LINKS_IN_PROMPT in the local adapter so the event reflects
+    exactly what the model sees.  Previously capped at 10, which created a log
+    blind spot for links ranked 11-30.
+    """
     top = [
         RankedLink(text=url_to_link.get(u, {}).get("text", ""), url=u, score=s)
-        for u, s in ranked[:10]
+        for u, s in ranked[:30]
     ]
     return LinksRanked(
         page_url=page_url,
@@ -200,7 +205,15 @@ def _check_result(output, page, extracted) -> tuple[bool, "str | None", list]:
             r"\s+", " ", f"{extracted.title}\n{extracted.text}".strip()
         ).casefold()
         norm_answer = re.sub(r"\s+", " ", output.answer.strip()).casefold()
-        if norm_answer and norm_answer not in full_text:
+        # Python docs render dotted names across separate <span> tags, producing
+        # "json . loads" or "functools. cache" instead of "json.loads". When the
+        # answer contains a dot, use a pattern that allows optional whitespace.
+        if "." in norm_answer:
+            dot_flex = re.compile(re.escape(norm_answer).replace("\\.", "\\s*\\.\\s*"))
+            answer_present = bool(dot_flex.search(full_text))
+        else:
+            answer_present = norm_answer in full_text
+        if norm_answer and not answer_present:
             logger.debug(
                 "Answer content gate rejected at %r: normalized answer missing "
                 "from page text (answer_length=%d)",

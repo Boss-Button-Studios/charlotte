@@ -28,7 +28,7 @@ from charlotte.core.engine_support import (
 )
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
-from charlotte.core.goal_preprocessor import DeterministicPreprocessor
+from charlotte.core.goal_preprocessor import AutoPreprocessor, DeterministicPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
@@ -70,6 +70,13 @@ if TYPE_CHECKING:
     from charlotte.models import GoalContext
 
 logger = logging.getLogger(__name__)
+
+
+def _domain_allowed(host: str, domains: frozenset[str]) -> bool:
+    """True if host is in domains or is a subdomain of any domain in domains."""
+    if host in domains:
+        return True
+    return any(host.endswith("." + d) for d in domains)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +156,7 @@ def crawl(
 
     resolved_user_agent = user_agent if user_agent is not None else CharlotteConfig.user_agent()
 
-    _preprocessor = preprocessor or DeterministicPreprocessor()
+    _preprocessor = preprocessor or AutoPreprocessor()
     _ranker = ranker or BM25LinkRanker()
     _extractor = candidate_extractor or DefaultCandidateExtractor()
     _verifier = verifier or DefaultDestinationVerifier(
@@ -168,12 +175,15 @@ def crawl(
     ctx_ms = _elapsed_ms(ctx_t0)
 
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
-    _domains: frozenset[str]
     if allowed_domains is None:
-        if start_hostname.startswith("www."):
-            _domains = frozenset({start_hostname, start_hostname[4:]})
-        else:
-            _domains = frozenset({start_hostname, f"www.{start_hostname}"})
+        # Strip a leading "www." to get the registrant-level base domain, then
+        # allow any subdomain of it.  This lets a crawl starting at www.python.org
+        # follow links to docs.python.org, peps.python.org, etc. without requiring
+        # an explicit allowed_domains list.  Stripping only "www." (not deeper
+        # labels) keeps multi-tenant hosting domains safe: user.github.io stays
+        # scoped to user.github.io subdomains, not all *.github.io.
+        base = start_hostname[4:] if start_hostname.startswith("www.") else start_hostname
+        _domains: frozenset[str] = frozenset({base})
     else:
         _domains = frozenset(d.lower() for d in allowed_domains)
 
@@ -500,7 +510,7 @@ async def _crawl_core(
             except CharlotteConfigError:
                 continue
             link_host = (urlsplit(norm_link).hostname or "").lower()
-            if link_host not in allowed_domains:
+            if not _domain_allowed(link_host, allowed_domains):
                 continue
             if norm_link in visited:
                 continue

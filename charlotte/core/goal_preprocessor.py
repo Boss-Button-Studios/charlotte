@@ -92,6 +92,18 @@ _GOAL_TYPE_RULES: list[tuple[str, GoalType]] = [
     (".xlsx", "document_link"),
     (".csv", "document_link"),
     ("hours", "freeform_fact"),
+    # WH-question fact patterns — placed after all specific-type triggers so that
+    # "What is the price?" still matches "price" → price_extraction first.
+    ("what is the name", "freeform_fact"),
+    ("what is the", "freeform_fact"),
+    ("what are the", "freeform_fact"),
+    ("what are", "freeform_fact"),
+    ("what does", "freeform_fact"),
+    ("what function", "freeform_fact"),
+    ("what version", "freeform_fact"),
+    ("who is", "freeform_fact"),
+    ("who are", "freeform_fact"),
+    ("how many", "freeform_fact"),
 ]
 
 
@@ -543,3 +555,34 @@ class InMemoryGoalContextCache:
         if key not in self._store:
             self._store[key] = preprocessor(goal, navigation_hint, locale)
         return self._store[key]
+
+
+# ---------------------------------------------------------------------------
+# AutoPreprocessor — selects strategy automatically from goal type (spec §4.4)
+# ---------------------------------------------------------------------------
+
+class AutoPreprocessor:
+    """Zero-config preprocessor: fast for navigation, smart for fact goals.
+
+    Runs DeterministicPreprocessor first for a free goal-type signal.
+    Navigation goals return immediately with no model call. Fact-type goals
+    (freeform_fact, phone_extraction, etc.) escalate to HybridPreprocessor
+    for synonym expansion and better classification. Falls back silently to
+    the deterministic result if the model call fails.
+    """
+
+    model_id: str | None
+
+    def __init__(
+        self, *, base_url: str = _HYBRID_BASE_URL, model: str = _HYBRID_MODEL,
+        timeout: float | None = None,
+    ) -> None:
+        self._deterministic = DeterministicPreprocessor()
+        self._hybrid = HybridPreprocessor(base_url=base_url, model=model, timeout=timeout)
+        self.model_id = model
+
+    def __call__(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
+        ctx = self._deterministic(goal, navigation_hint, locale)
+        if ctx.goal_type == "navigation":
+            return ctx
+        return self._hybrid(goal, navigation_hint, locale)

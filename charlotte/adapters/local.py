@@ -63,6 +63,13 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 # 8 192 fits the largest expected prompts with headroom for the response.
 _OLLAMA_NUM_CTX = 8192
 
+# BM25 has already ranked links best-first, so only the top N matter for the
+# model's decision.  Index pages (e.g. library/index.html, py-modindex.html)
+# can have 200–800+ links; sending all of them blows the context window and
+# causes HTTP 400 or truncated JSON.  30 is enough to surface the right path
+# while keeping the link section under ~600 tokens.
+_MAX_LINKS_IN_PROMPT = 30
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "deepseek-r1:14b"
 _CHAT_PATH = "/api/chat"
@@ -89,9 +96,13 @@ Rules:
 - "answer": copy the specific value verbatim — do not paraphrase or summarize. Use null when the goal is to find a page or link rather than a fact.
 - If your reasoning names a specific value that answers the goal (a phone number, address, price, name, or other fact), that exact value MUST also appear in "answer". Mentioning the value in "reasoning" but returning answer=null is an error.
 - Do NOT substitute clearly wrong information. If the goal asks for an emergency room number and only a general hospital line is listed, set found=false — those are different things. But do not require explicit labeling: a phone number in the main body of a department's own page is that department's number even without a label. Set found=true with your actual confidence.
+- "links_to_follow" must only contain URLs copied exactly from the <available_links> list. Do not modify, shorten, extend, or invent URLs — use the exact strings shown.
 - Do NOT add any URL from "Previously visited pages" to links_to_follow — those pages have already been evaluated. Do not add the current page URL to links_to_follow either.
 - When the goal involves finding a specific category of content (doctors by specialty, products by type, articles by topic), follow directory, index, or category links that could lead to that category — even if the match is indirect (e.g. "Specialists" → "Respiratory" → respiratory doctors).
 - When found=false, links_to_follow must NOT be empty if any link on this page could plausibly lead toward the goal. This applies especially on index, listing, or hub pages: if you can see a link that clearly heads toward the goal target, put it in links_to_follow even though you haven't visited it yet. Return an empty links_to_follow ONLY when you have genuinely exhausted all promising paths or the goal is clearly unachievable on this site.
+- When found=true, result_url must be set — either to the current page URL (when this page is the answer) or to a URL copied exactly from the <available_links> list. result_url may never be null when found=true.
+- If the page contains a specific value that directly answers the goal question (a function name, a count, a year, an author, a title), set found=true with that value in "answer". Do not keep searching when you can already answer the question.
+- Contradiction rule: if your "reasoning" says the answer is "explicitly described", "explicitly demonstrated", "explicitly stated", or otherwise directly present on this page, then found MUST be true. Stating that the answer is explicitly on the page while returning found=false is always self-contradictory and wrong.
 - Respond with JSON only. No prose outside the JSON object.\
 """
 
@@ -134,7 +145,7 @@ def _build_user_prompt(
     parts.append("Available links (text → URL, web-sourced):")
     parts.append("<available_links>")
     if available_links:
-        for link in available_links:
+        for link in available_links[:_MAX_LINKS_IN_PROMPT]:
             parts.append(f"  {link.get('text', '')} → {link.get('url', '')}")
     else:
         parts.append("(none)")
@@ -169,6 +180,50 @@ def _build_user_prompt(
     )
 
     return "\n".join(parts)
+
+
+_EXPLICIT_MARKERS: tuple[str, ...] = (
+    "explicitly describ",   # covers describes / described / describing
+    "explicitly demonstrat",  # covers demonstrates / demonstrated
+    "explicitly stat",      # covers states / stated
+    "explicitly shows",
+    "explicitly shown",
+    "explicitly provides",
+    "explicitly provided",
+    "explicitly listed",
+    "explicitly mentioned",
+    "is the correct answer",
+    "correct answer to the goal",
+    "is explicitly",        # catches "answer is explicitly X"
+)
+# Matches Python dotted names: json.loads(), functools.cache, @functools.cache
+_PYTHON_DOTTED_RE = re.compile(
+    r"(?:@|\b)([a-z_]\w*\.[a-z_]\w*(?:\(\))?)\b", re.IGNORECASE
+)
+
+
+def _rescue_found_from_reasoning(data: dict) -> dict:
+    """Flip found=False→True when high-confidence reasoning contradicts the decision.
+
+    DeepSeek-R1 sometimes identifies the answer in 'reasoning' but outputs
+    found=False, apparently seeking a more dedicated page.  When confidence is
+    high (≥0.80) and reasoning contains an explicit-presence marker, we treat
+    the model's own description as the authoritative signal and flip found.
+    A best-effort Python dotted-name rescue populates 'answer' when absent.
+    """
+    if data.get("found"):
+        return data
+    if (data.get("confidence") or 0.0) < 0.80:
+        return data
+    reasoning_lower = (data.get("reasoning") or "").lower()
+    if not any(marker in reasoning_lower for marker in _EXPLICIT_MARKERS):
+        return data
+    data["found"] = True
+    if data.get("answer") is None:
+        match = _PYTHON_DOTTED_RE.search(data.get("reasoning") or "")
+        if match:
+            data["answer"] = match.group(1)
+    return data
 
 
 def _rescue_answer_from_reasoning(data: dict) -> dict:
@@ -321,9 +376,17 @@ class LocalAdapter:
             schema_hint=schema_hint,
         )
 
-        if self._verbose:
-            return await self._call_streaming(user_prompt)
-        return await self._call_blocking(user_prompt)
+        raw = (
+            await self._call_streaming(user_prompt)
+            if self._verbose
+            else await self._call_blocking(user_prompt)
+        )
+        # Rescue can flip found=True without setting result_url (it has no page URL
+        # context). validate_adapter_output rejects found=True with null result_url,
+        # causing a retry that undoes the rescue. Backfill with the current page URL.
+        if raw.get("found") and raw.get("result_url") is None:
+            raw["result_url"] = page_url
+        return raw
 
     async def _call_blocking(self, user_prompt: str) -> dict[str, object]:
         """Non-streaming request — waits for the full response before returning."""
@@ -359,7 +422,7 @@ class LocalAdapter:
         try:
             data = response.json()
             raw_content = data["message"]["content"] or ""
-            return _rescue_answer_from_reasoning(_parse_model_json(raw_content))
+            return _rescue_answer_from_reasoning(_rescue_found_from_reasoning(_parse_model_json(raw_content)))
         except json.JSONDecodeError:
             logger.debug("Local model response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None
@@ -418,7 +481,7 @@ class LocalAdapter:
 
         raw_content = "".join(parts)
         try:
-            return _rescue_answer_from_reasoning(_parse_model_json(raw_content))
+            return _rescue_answer_from_reasoning(_rescue_found_from_reasoning(_parse_model_json(raw_content)))
         except json.JSONDecodeError:
             logger.debug("Local model streaming response JSON decode failed")
             raise AdapterOutputError("Local model response was not valid JSON") from None

@@ -21,6 +21,7 @@ from charlotte.adapters.local import (
     _DEFAULT_BASE_URL,
     _DEFAULT_MODEL,
     _build_user_prompt,
+    _rescue_found_from_reasoning,
 )
 from charlotte.exceptions import AdapterOutputError, CharlotteConfigError, CharlotteTimeoutError
 
@@ -531,3 +532,99 @@ def test_local_adapter_pickle_raises():
     adapter = LocalAdapter(base_url="http://localhost:11434")
     with pytest.raises(TypeError, match="pickled"):
         pickle.dumps(adapter)
+
+
+# ---------------------------------------------------------------------------
+# _rescue_found_from_reasoning
+# ---------------------------------------------------------------------------
+
+def test_rescue_found_flips_on_explicit_marker_high_confidence():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page explicitly demonstrates the use of json.loads() to parse JSON.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "json.loads"
+
+
+def test_rescue_found_extracts_dotted_name_from_reasoning():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page explicitly describes the @functools.cache decorator.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "functools.cache"
+
+
+def test_rescue_found_does_not_trigger_below_confidence_threshold():
+    data = {
+        "found": False, "confidence": 0.75,
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_does_not_trigger_without_explicit_marker():
+    data = {
+        "found": False, "confidence": 0.95,
+        "reasoning": "The page mentions the function but I want a better source.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is False
+
+
+def test_rescue_found_noop_when_already_true():
+    data = {"found": True, "confidence": 0.9, "reasoning": "Found it.", "answer": "Tim Peters"}
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "Tim Peters"
+
+
+def test_rescue_found_preserves_existing_answer():
+    data = {
+        "found": False, "confidence": 0.9,
+        "reasoning": "The page explicitly states the answer is 42.",
+        "answer": "42",
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "42"
+
+
+def test_rescue_found_triggers_on_past_tense_described():
+    """'explicitly described' (past tense) should match the stem-based marker."""
+    data = {
+        "found": False, "confidence": 1.0,
+        "reasoning": "The function json.loads() is explicitly described as the decoder for parsing JSON strings.",
+        "answer": None,
+    }
+    result = _rescue_found_from_reasoning(data)
+    assert result["found"] is True
+    assert result["answer"] == "json.loads"
+
+
+@respx.mock
+@pytest.mark.anyio
+async def test_call_backfills_result_url_when_rescue_fires():
+    """When rescue flips found=True but result_url is None, __call__ sets result_url=page_url."""
+    # Model returns contradiction: found=False, high confidence, explicit marker
+    contradiction = {
+        "found": False,
+        "confidence": 0.95,
+        "result_url": None,
+        "links_to_follow": [],
+        "reasoning": "The page explicitly describes the answer.",
+        "answer": None,
+    }
+    respx.post(_ENDPOINT).mock(return_value=_ok_response(contradiction))
+    adapter = LocalAdapter()
+    result = await adapter(**_PAGE_CONTEXT)
+    assert result["found"] is True
+    assert result["result_url"] == _PAGE_CONTEXT["page_url"]

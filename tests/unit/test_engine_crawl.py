@@ -219,7 +219,7 @@ async def test_stream_true_returns_async_generator():
 
 @respx.mock
 async def test_apex_to_www_redirect_is_followed():
-    """Default allowed_domains includes www. counterpart so apex→www redirects succeed."""
+    """Default domain scope allows all subdomains of the base domain, so apex→www redirects succeed."""
     # rchsd.org → www.rchsd.org redirect pattern
     respx.get("http://example.com/robots.txt").mock(return_value=httpx.Response(404))
     respx.get("http://www.example.com/robots.txt").mock(return_value=httpx.Response(404))
