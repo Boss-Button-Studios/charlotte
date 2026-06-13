@@ -88,7 +88,7 @@ TRIALS: list[Trial] = [
     Trial(
         name="lz_pep8_title",
         url="https://peps.python.org/pep-0008/",
-        goal="What is the title of this PEP?",
+        goal="What is the title of PEP 8?",
         max_pages=3,
         max_depth=1,
         answer_contains=["Style Guide for Python Code"],
@@ -128,16 +128,16 @@ TRIALS: list[Trial] = [
     ),
     Trial(
         name="nav_whatsnew_312",
-        url="https://www.python.org",
+        url="https://docs.python.org/3/",
         goal="Find the What's New in Python 3.12 page",
-        max_pages=10,
-        max_depth=4,
+        max_pages=6,
+        max_depth=3,
         result_url_contains="whatsnew/3.12",
     ),
     Trial(
         name="nav_iana_port_assignments",
         url="https://www.iana.org/",
-        goal="Find the page listing service name and port number assignments",
+        goal="Find the specific IANA page for service names and port number assignments, not the protocols index",
         max_pages=8,
         max_depth=3,
         result_url_contains="service-names-port-numbers",
@@ -209,15 +209,26 @@ async def run_trial(trial: Trial, adapter: object) -> dict:
     elapsed_ms = int((monotonic() - start) * 1000)
 
     passed = _score_trial(trial, result) if result and not error else False
+    found = result.found if result else False                  # type: ignore[union-attr]
     answer = (result.answers or [None])[0] if result else None    # type: ignore[union-attr]
     result_url = (result.result_urls or [None])[0] if result else None  # type: ignore[union-attr]
+
+    if error:
+        outcome = "ERROR"
+    elif passed:
+        outcome = "PASS"
+    elif found:
+        outcome = "WRONG"   # found=True but answer/URL check failed
+    else:
+        outcome = "GAVE_UP"  # found=False; may or may not have exhausted budget
 
     return {
         "name": trial.name,
         "url": trial.url,
         "goal": trial.goal,
         "passed": passed,
-        "found": result.found if result else False,           # type: ignore[union-attr]
+        "outcome": outcome,
+        "found": found,
         "answer": answer,
         "result_url": result_url,
         "pages_visited": result.pages_visited if result else 0,  # type: ignore[union-attr]

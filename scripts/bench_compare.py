@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 
 
-_W = 32  # trial name column width
+_W = 32   # trial name column width
+_SW = 7   # status column width ("GAVE_UP" is the longest outcome label)
 
 
 _REQUIRED_KEYS = frozenset({
@@ -44,14 +45,16 @@ def _pct(n: int, d: int) -> str:
     return f"{100*n//d}%" if d else "—"
 
 
-def _delta(a: int | float, b: int | float, *, lower_is_better: bool = False) -> str:
+def _delta(a: int | float, b: int | float, *, lower_is_better: bool = False, comparable: bool = True) -> str:
     diff = b - a
     if diff == 0:
         return "  ="
-    better = diff < 0 if lower_is_better else diff > 0
     sign = "+" if diff > 0 else ""
-    marker = "▲" if better else "▼"
-    return f"{marker} {sign}{diff:,}" if isinstance(diff, int) else f"{marker} {sign}{diff:.0f}"
+    if comparable:
+        better = diff < 0 if lower_is_better else diff > 0
+        marker = "▲" if better else "▼"
+        return f"{marker} {sign}{diff:,}" if isinstance(diff, int) else f"{marker} {sign}{diff:.0f}"
+    return f"  {sign}{diff:,}" if isinstance(diff, int) else f"  {sign}{diff:.0f}"
 
 
 def main() -> None:
@@ -80,29 +83,35 @@ def main() -> None:
     print()
 
     # ── per-trial table ──────────────────────────────────────────────────────
-    sep = "  " + "─" * (_W + 2 + 8 + 2 + 10 + 2 + 16)
+    _status_w = _SW * 2 + 3   # "GAVE_UP → GAVE_UP" = 7+3+7 = 17
+    sep = "  " + "─" * (_W + 2 + _status_w + 2 + 10 + 2 + 16)
 
-    print(f"  {'TRIAL':<{_W}}  {'─PASS─':>8}  {'─PAGES─':>10}  {'─ELAPSED ms─':>16}")
+    print(f"  {'TRIAL':<{_W}}  {'─ STATUS ─':>{_status_w}}  {'─PAGES─':>10}  {'─ELAPSED ms─':>16}")
     print(sep)
 
     regressions: list[str] = []
 
+    def _status(t: dict | None) -> str:
+        if t is None:
+            return "—"
+        if t.get("error"):
+            return "ERR"
+        if "outcome" in t:
+            return t["outcome"]
+        # backwards compat: JSON produced before the outcome field was added
+        if t.get("passed"):
+            return "PASS"
+        return "GAVE_UP" if not t.get("found") else "WRONG"
+
+    def _pages(t: dict | None) -> str:
+        return str(t["pages_visited"]) if t else "—"
+
+    def _ms(t: dict | None) -> str:
+        return f"{t['elapsed_ms']:,}" if t else "—"
+
     for name in all_names:
         a = base_by_name.get(name)
         b = curr_by_name.get(name)
-
-        def _status(t: dict | None) -> str:
-            if t is None:
-                return "—"
-            if t.get("error"):
-                return "ERR"
-            return "PASS" if t.get("passed") else "FAIL"
-
-        def _pages(t: dict | None) -> str:
-            return str(t["pages_visited"]) if t else "—"
-
-        def _ms(t: dict | None) -> str:
-            return f"{t['elapsed_ms']:,}" if t else "—"
 
         sa, sb = _status(a), _status(b)
         pa = a["pages_visited"] if a else None
@@ -110,20 +119,30 @@ def main() -> None:
         ma = a["elapsed_ms"] if a else None
         mb = b["elapsed_ms"] if b else None
 
-        # page and ms deltas
-        pg_delta = _delta(pa, pb, lower_is_better=True) if pa is not None and pb is not None else "  —"
-        ms_delta = _delta(ma, mb, lower_is_better=True) if ma is not None and mb is not None else "  —"
+        # Page and ms deltas are only directionally meaningful when both sides
+        # produced the same class of outcome. A slow PASS vs a fast GAVE_UP
+        # is not a timing regression — it's a win.
+        both_pass = sa == sb == "PASS"
+        both_gave_up = sa == sb == "GAVE_UP"
+        timing_comparable = both_pass or both_gave_up
 
-        # regression flag
+        pg_delta = _delta(pa, pb, lower_is_better=True, comparable=timing_comparable) if pa is not None and pb is not None else "  —"
+        ms_delta = _delta(ma, mb, lower_is_better=True, comparable=timing_comparable) if ma is not None and mb is not None else "  —"
+
+        # regression / improvement flags
         if sa == "PASS" and sb != "PASS":
             regressions.append(name)
             flag = " ◀ REGRESSION"
         elif sa != "PASS" and sb == "PASS":
             flag = " ◀ fixed"
+        elif sa == "GAVE_UP" and sb == "WRONG":
+            flag = " ◀ now wrong"
+        elif sa == "WRONG" and sb == "GAVE_UP":
+            flag = " ◀ stopped guessing"
         else:
             flag = ""
 
-        print(f"  {name:<{_W}}  {sa:>4} → {sb:<4}  "
+        print(f"  {name:<{_W}}  {sa:>{_SW}} → {sb:<{_SW}}  "
               f"{_pages(a):>4} → {_pages(b):<4} {pg_delta:>6}  "
               f"{_ms(a):>7} → {_ms(b):<7} {ms_delta:>8}{flag}")
 
