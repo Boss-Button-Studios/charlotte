@@ -52,28 +52,27 @@ INTER_PARISH_DELAY = 3.0
 GOAL = "Find and download the latest weekly parish bulletin PDF"
 NAVIGATION_HINT = (
     "Look for a link labelled 'bulletin', 'weekly bulletin', 'parish bulletin', "
-    "or 'newsletter'. It is usually a PDF file. Download it."
+    "or 'newsletter'. It is usually a PDF file. Download it. "
+    "Parish bulletins are published in advance for the coming Sunday, so the most "
+    "recent bulletin may carry a date up to 7 days in the future — that is correct."
 )
 
 PARISHES = [
-    {
-        "name": "Mary Star of the Sea",
-        "slug": "mary_star_lajolla",
-        "url":  "https://marystarlajolla.org/",
-    },
+    # marystarlajolla.org: bulletins hosted on parishesonline.com (JS-only SPA),
+    # unreachable without Playwright. Removed until JS rendering is added.
     {
         "name": "St. Anne",
         "slug": "st_anne_sd",
         "url":  "https://stannesd.com/",
     },
     {
-        "name": "San Jose",
-        "slug": "san_jose_lg",
+        "name": "St. John of the Cross",
+        "slug": "st_john_cross_lg",
         "url":  "https://www.sjcparishlg.org/",
     },
     {
-        "name": "Santa Maria",
-        "slug": "santa_maria_tlm",
+        "name": "St. Martin of Tours",
+        "slug": "st_martin_tours_tlm",
         "url":  "https://www.smtlm.org/",
     },
     {
@@ -133,6 +132,7 @@ async def run_parish(
             stream=True,
             default_delay=1.5,
             result_to_file=parish_dir,
+            max_result_bytes=50 * 1024 * 1024,  # 50 MB; default 10 MB too small for some bulletins
         )
 
         async for event in gen:

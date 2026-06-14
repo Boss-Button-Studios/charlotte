@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -204,6 +205,7 @@ async def call_with_validation(
     visit_history: list[str],
     results_so_far: int,
     schema_hint: str | None = None,
+    reference_date: date | None = None,
 ) -> AdapterOutput:
     """Call an adapter, validate its output, and retry once with a schema hint.
 
@@ -242,6 +244,7 @@ async def call_with_validation(
         available_links=available_links,
         visit_history=visit_history,
         results_so_far=results_so_far,
+        reference_date=reference_date,
     )
 
     # First attempt — optional hint (None for normal calls; reinforced text for H3 retry)

@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import sys
+from datetime import date
 from urllib.parse import urlsplit
 
 import httpx
@@ -111,6 +112,7 @@ def _build_user_prompt(
     *,
     goal: str,
     navigation_hint: str | None,
+    reference_date: date | None = None,
     page_title: str,
     page_url: str,
     page_summary: str,
@@ -126,6 +128,8 @@ def _build_user_prompt(
         parts.append("")
 
     parts.append(f"Goal: {goal}")
+    if reference_date:
+        parts.append(f"Today's date: {reference_date.strftime('%B %d, %Y')}")
     if navigation_hint:
         parts.append(f"Navigation hint: {navigation_hint}")
 
@@ -374,10 +378,12 @@ class LocalAdapter:
         visit_history: list[str],
         results_so_far: int,
         schema_hint: str | None = None,
+        reference_date: date | None = None,
     ) -> dict[str, object]:
         user_prompt = _build_user_prompt(
             goal=goal,
             navigation_hint=navigation_hint,
+            reference_date=reference_date,
             page_title=page_title,
             page_url=page_url,
             page_summary=page_summary,

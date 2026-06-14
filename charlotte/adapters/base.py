@@ -10,6 +10,7 @@ See spec §6.3.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 
@@ -35,6 +36,7 @@ class AdapterProtocol(Protocol):
         visit_history: list[str],
         results_so_far: int,
         schema_hint: str | None = None,
+        reference_date: date | None = None,
     ) -> dict[str, object]:
         """Evaluate a page and return a raw navigation decision.
 

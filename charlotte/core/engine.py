@@ -399,6 +399,7 @@ async def _crawl_core(
                 available_links=ranked_links,
                 visit_history=history,
                 results_so_far=len(result_urls),
+                reference_date=goal_context.reference_date,
             )
         except AdapterOutputError as exc:
             yield PageSkipped(url=page.url, reason=str(exc), error_type="AdapterOutputError")
@@ -442,6 +443,7 @@ async def _crawl_core(
                         page_title=extracted.title, page_url=page.url,
                         page_summary=extracted.text, available_links=ranked_links,
                         visit_history=history, results_so_far=len(result_urls),
+                        reference_date=goal_context.reference_date,
                     )
                 except AdapterOutputError as exc:
                     yield PageSkipped(url=page.url, reason=str(exc), error_type="AdapterOutputError")
@@ -471,6 +473,7 @@ async def _crawl_core(
                         page_summary=extracted.text, available_links=ranked_links,
                         visit_history=history, results_so_far=len(result_urls),
                         schema_hint=hint,
+                        reference_date=goal_context.reference_date,
                     )
                 except AdapterOutputError as exc:
                     yield PageSkipped(url=page.url, reason=str(exc), error_type="AdapterOutputError")

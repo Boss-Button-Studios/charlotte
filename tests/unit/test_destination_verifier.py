@@ -321,16 +321,16 @@ async def test_relevance_score_recorded_in_result():
 @respx.mock
 @pytest.mark.asyncio
 async def test_relevance_binary_content_skips_text_scoring():
-    """A PDF response has no HTML text to score; BM25 gets empty text → 0 score."""
+    """Binary responses cannot be BM25-scored; verifier falls back to existence pass."""
     respx.get(_DOC_URL).mock(
         return_value=httpx.Response(200, content=b"%PDF-1.4 binary content",
                                     headers={"content-type": "application/pdf"})
     )
-    # With threshold 0 the page still passes (existence is fine, score is 0)
-    v = _verifier(mode="relevance", verify_threshold=0.0)
+    v = _verifier(mode="relevance", verify_threshold=0.9)
     result, _ = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
     assert result.passed is True
-    assert result.score == 0.0
+    assert result.score is None
+    assert result.reason == "ok_existence_binary"
 
 
 # ---------------------------------------------------------------------------
@@ -425,11 +425,12 @@ async def test_fetch_result_content_false_suppresses_for_document_link():
 @pytest.mark.asyncio
 async def test_content_not_captured_when_verification_fails():
     """Failed relevance check → no ResultContent even for document_link goals."""
+    # Use HTML with no query-term overlap so BM25 scores 0 and fails.
+    irrelevant_html = b"<html><body><p>Completely unrelated page about gardening tips.</p></body></html>"
     respx.get(_DOC_URL).mock(
-        return_value=httpx.Response(200, content=b"%PDF",
-                                    headers={"content-type": "application/pdf"})
+        return_value=httpx.Response(200, content=irrelevant_html,
+                                    headers={"content-type": "text/html; charset=utf-8"})
     )
-    # threshold 0.5 with binary content → score 0.0 → fails
     v = _verifier(mode="relevance", verify_threshold=0.5)
     result, content = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
     assert result.passed is False

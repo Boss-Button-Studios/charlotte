@@ -10,7 +10,7 @@ completion. Do not rename fields without a major version bump. See spec §7, §1
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Literal, Union
@@ -90,6 +90,9 @@ class GoalContext:
     # Structured surface for silent drops, normalization changes, sanitization
     # actions (§4.2). Each entry uses a stable prefix tag, e.g. "regex_dropped:".
     validation_warnings: list[str]
+    # Set to today's date when the goal contains temporal terms ("latest",
+    # "recent", etc.) so the model knows what "current" means during evaluation.
+    reference_date: date | None = None
 
 
 # ---------------------------------------------------------------------------

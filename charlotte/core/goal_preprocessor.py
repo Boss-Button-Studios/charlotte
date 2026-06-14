@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Protocol, runtime_checkable
 
 import httpx
@@ -124,6 +124,26 @@ def _detect_goal_type(goal_normalized: str) -> GoalType:
 
 
 # ---------------------------------------------------------------------------
+# Temporal reference date detection
+# ---------------------------------------------------------------------------
+
+# Terms that signal the goal is time-relative; when matched, the preprocessor
+# stamps GoalContext.reference_date with today's date so the model knows what
+# "latest" or "current" means during page evaluation.
+_TEMPORAL_RE = re.compile(
+    r"\b(?:latest|newest|most\s+recent|recent|current|today"
+    r"|this\s+week|this\s+month|this\s+year|upcoming)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_reference_date(goal: str, navigation_hint: str | None) -> date | None:
+    """Return today's date if the goal or hint contains temporal terms, else None."""
+    combined = goal + " " + (navigation_hint or "")
+    return date.today() if _TEMPORAL_RE.search(combined) else None
+
+
+# ---------------------------------------------------------------------------
 # DeterministicPreprocessor
 # ---------------------------------------------------------------------------
 
@@ -167,6 +187,7 @@ class DeterministicPreprocessor:
             created_at=datetime.now(timezone.utc),
             locale=locale,
             validation_warnings=[],
+            reference_date=_detect_reference_date(goal, navigation_hint),
         )
 
 
@@ -440,6 +461,7 @@ def _validate_hybrid_output(
         created_at=datetime.now(timezone.utc),
         locale=locale,
         validation_warnings=warnings,
+        reference_date=_detect_reference_date(goal, navigation_hint),
     )
 
 
