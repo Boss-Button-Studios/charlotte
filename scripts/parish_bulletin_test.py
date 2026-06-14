@@ -236,9 +236,12 @@ async def run_parish(
 
     # Write event log to the same directory as the downloaded file
     events_path = parish_dir / "events.jsonl"
-    with events_path.open("w", encoding="utf-8") as fh:
-        for ev in result.events:
-            fh.write(json.dumps(ev) + "\n")
+    try:
+        with events_path.open("w", encoding="utf-8") as fh:
+            for ev in result.events:
+                fh.write(json.dumps(ev) + "\n")
+    except OSError as exc:
+        print(f"  WARNING: could not write events log: {exc}", flush=True)
 
     status = "FOUND" if result.found else "NOT FOUND"
     print(f"  → {status}  {result.pages_visited} pages  {result.elapsed_ms // 1000}s", flush=True)
@@ -294,7 +297,10 @@ async def main() -> None:
             for r in results
         ],
     }
-    (run_dir / "_summary.json").write_text(json.dumps(summary, indent=2))
+    try:
+        (run_dir / "_summary.json").write_text(json.dumps(summary, indent=2))
+    except OSError as exc:
+        print(f"WARNING: could not write summary: {exc}", flush=True)
 
     # Final table
     found_n = summary["found"]

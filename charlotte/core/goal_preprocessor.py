@@ -5,7 +5,9 @@ GoalPreprocessorProtocol defines the callable interface. DeterministicPreprocess
 is the Phase A default: tokenizes the goal into anchor_terms with no model calls.
 HybridPreprocessor (Phase B) calls a local model to expand synonyms and improve
 goal-type classification, falling back to DeterministicPreprocessor on any failure.
-InMemoryGoalContextCache caches GoalContext objects within a single crawl.
+
+Cache and AutoPreprocessor live in goal_context_cache to keep this file under
+the 600-line cap.
 """
 
 from __future__ import annotations
@@ -533,78 +535,3 @@ class HybridPreprocessor:
         return _validate_hybrid_output(_extract_json(content), goal, navigation_hint, locale,
                                        self._model)
 
-
-# ---------------------------------------------------------------------------
-# Cache protocol and in-memory implementation
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class GoalContextCacheProtocol(Protocol):
-    def get_or_create(
-        self,
-        goal: str,
-        navigation_hint: str | None,
-        locale: str,
-        preprocessor: GoalPreprocessorProtocol,
-    ) -> GoalContext: ...
-
-
-class InMemoryGoalContextCache:
-    """Dict-backed GoalContext cache scoped to a single crawl.
-
-    Cache key includes locale and CACHE_FORMAT_VERSION so that locale changes
-    and library upgrades always produce fresh contexts (spec §4.6).
-    """
-
-    def __init__(self) -> None:
-        self._store: dict[tuple, GoalContext] = {}
-
-    def get_or_create(
-        self,
-        goal: str,
-        navigation_hint: str | None,
-        locale: str,
-        preprocessor: GoalPreprocessorProtocol,
-    ) -> GoalContext:
-        key = (
-            normalize_text(goal),
-            normalize_text(navigation_hint or ""),
-            type(preprocessor).__name__,
-            preprocessor.model_id,
-            locale,
-            _models.CACHE_FORMAT_VERSION,  # read at call time so bumps bust cached entries
-        )
-        if key not in self._store:
-            self._store[key] = preprocessor(goal, navigation_hint, locale)
-        return self._store[key]
-
-
-# ---------------------------------------------------------------------------
-# AutoPreprocessor — selects strategy automatically from goal type (spec §4.4)
-# ---------------------------------------------------------------------------
-
-class AutoPreprocessor:
-    """Zero-config preprocessor: fast for navigation, smart for fact goals.
-
-    Runs DeterministicPreprocessor first for a free goal-type signal.
-    Navigation goals return immediately with no model call. Fact-type goals
-    (freeform_fact, phone_extraction, etc.) escalate to HybridPreprocessor
-    for synonym expansion and better classification. Falls back silently to
-    the deterministic result if the model call fails.
-    """
-
-    model_id: str | None
-
-    def __init__(
-        self, *, base_url: str = _HYBRID_BASE_URL, model: str = _HYBRID_MODEL,
-        timeout: float | None = None,
-    ) -> None:
-        self._deterministic = DeterministicPreprocessor()
-        self._hybrid = HybridPreprocessor(base_url=base_url, model=model, timeout=timeout)
-        self.model_id = model
-
-    def __call__(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
-        ctx = self._deterministic(goal, navigation_hint, locale)
-        if ctx.goal_type == "navigation":
-            return ctx
-        return self._hybrid(goal, navigation_hint, locale)

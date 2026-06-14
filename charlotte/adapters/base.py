@@ -54,6 +54,10 @@ class AdapterProtocol(Protocol):
             schema_hint: Optional schema reminder injected by the engine on a
                 retry after a validation failure. Adapters should include this
                 prominently in the prompt when present.
+            reference_date: Today's date when the goal contains temporal terms
+                (e.g., "latest", "recent", "upcoming"). Emit it in the prompt
+                so the model knows what "current" means. None when the goal is
+                not time-relative.
 
         Returns:
             Raw dict with keys: found, confidence, result_url,

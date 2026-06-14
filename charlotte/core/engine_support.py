@@ -223,3 +223,10 @@ def _check_result(output, page, extracted) -> tuple[bool, "str | None", list]:
             effective_result_url = None
 
     return effective_found, effective_result_url, prov.links_to_follow
+
+
+def _domain_allowed(host: str, domains: frozenset[str]) -> bool:
+    """True if host is in domains or is a subdomain of any domain in domains."""
+    if host in domains:
+        return True
+    return any(host.endswith("." + d) for d in domains)

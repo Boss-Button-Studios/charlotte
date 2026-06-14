@@ -7,11 +7,10 @@ import httpx
 import pytest
 import respx
 
+from charlotte.core.goal_context_cache import AutoPreprocessor, InMemoryGoalContextCache
 from charlotte.core.goal_preprocessor import (
-    AutoPreprocessor,
     DeterministicPreprocessor,
     HybridPreprocessor,
-    InMemoryGoalContextCache,
     _clean_model_json,
     _extract_json,
 )

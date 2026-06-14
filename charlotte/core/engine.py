@@ -18,6 +18,7 @@ from charlotte.core.engine_support import (
     _build_crawl_result,
     _check_result,
     _content_metadata,
+    _domain_allowed,
     _elapsed_ms,
     _empty_result,
     _make_links_ranked,
@@ -28,7 +29,7 @@ from charlotte.core.engine_support import (
 )
 from charlotte.core.extractor import extract
 from charlotte.core.fetcher import PageFetcher, _import_playwright
-from charlotte.core.goal_preprocessor import AutoPreprocessor
+from charlotte.core.goal_context_cache import AutoPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.core.plausibility import NavDecision, check_plausibility
@@ -70,13 +71,6 @@ if TYPE_CHECKING:
     from charlotte.models import GoalContext
 
 logger = logging.getLogger(__name__)
-
-
-def _domain_allowed(host: str, domains: frozenset[str]) -> bool:
-    """True if host is in domains or is a subdomain of any domain in domains."""
-    if host in domains:
-        return True
-    return any(host.endswith("." + d) for d in domains)
 
 
 # ---------------------------------------------------------------------------
