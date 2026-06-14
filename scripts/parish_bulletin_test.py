@@ -60,6 +60,10 @@ NAVIGATION_HINT = (
 PARISHES = [
     # marystarlajolla.org: bulletins hosted on parishesonline.com (JS-only SPA),
     # unreachable without Playwright. Removed until JS rendering is added.
+    #
+    # sanluisreyparish.org: /bulletins/ → blog post → Google Drive /view link.
+    # Google Drive requires auth; verifier will reject. Same class as parishesonline.com.
+    # Left out until JS/auth-wall handling is added.
     {
         "name": "St. Anne",
         "slug": "st_anne_sd",
@@ -79,6 +83,21 @@ PARISHES = [
         "name": "Our Lady of Guadalupe",
         "slug": "olg_calexico",
         "url":  "https://www.ourladyofguadalupeparish-calexico.org/",
+    },
+    {
+        # /bulletin/ lists blog posts; the direct PDF link appears on the listing
+        # page itself alongside each post title — no need to enter the post.
+        "name": "Holy Angels",
+        "slug": "holy_angels_sd",
+        "url":  "https://www.holyangelssandiego.com/",
+    },
+    {
+        # /bulletin/ shows a date grid with direct PDF links. Site is behind on
+        # uploads — most recent available PDF is well past the current date.
+        # Charlotte should retrieve whichever PDF is actually there and latest.
+        "name": "Holy Spirit",
+        "slug": "holy_spirit_sd",
+        "url":  "https://holyspiritsd.com/",
     },
 ]
 

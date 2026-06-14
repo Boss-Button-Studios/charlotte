@@ -20,7 +20,6 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-import charlotte.models as _models
 from charlotte.core.text_normalization import normalize_text, tokenize
 from charlotte.models import GoalContext, GoalType
 
