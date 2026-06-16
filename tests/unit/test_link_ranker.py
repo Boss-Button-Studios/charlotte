@@ -299,10 +299,14 @@ def test_extract_date_named_month_year_from_url_path_segment():
 
 
 def test_extract_date_named_month_infers_year_when_no_path_year():
-    """'January 4th' with no year anywhere should fall back to _infer_year."""
+    """'January 4th' with no year anywhere should fall back to _infer_year.
+
+    The URL deliberately has no year path segment, so _extract_date cannot read
+    the year from the path and must infer it via _infer_year (the branch under test).
+    """
     d = _extract_date(
         "January 4th Bulletin",
-        "https://holyspiritsd.com/wp-content/uploads/2026/01/January-4th-Bulletin.pdf",
+        "https://holyspiritsd.com/bulletins/January-4th-Bulletin.pdf",
         _REF,
     )
     assert d == date(2026, 1, 4)

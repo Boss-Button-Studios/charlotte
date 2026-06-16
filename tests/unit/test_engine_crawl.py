@@ -1577,6 +1577,17 @@ async def test_verify_403_on_render_js_site_reroutes_as_navigation():
     async def _noop_aexit(self, *exc):
         return False
 
+    # PageFetcher.__init__ calls _import_playwright() when render_js=True to store
+    # the factory + timeout class. CI has no Playwright installed, so stub the
+    # fetcher's own reference (not just the engine's eager check) with a dummy
+    # factory and timeout class — neither is exercised here because the browser
+    # lifecycle (__aenter__/__aexit__/fetch) is fully mocked.
+    class _DummyPWTimeout(Exception):
+        pass
+
+    def _fake_import_playwright():
+        return (lambda *a, **k: None, _DummyPWTimeout)
+
     async def _mock_adapter(*, page_url, **kwargs):
         if page_url == _H:
             # Model prematurely claims the listing page as the document.
@@ -1609,6 +1620,7 @@ async def test_verify_403_on_render_js_site_reroutes_as_navigation():
         ), content
 
     with patch("charlotte.core.engine._import_playwright"), \
+         patch("charlotte.core.fetcher._import_playwright", _fake_import_playwright), \
          patch("charlotte.core.fetcher.PageFetcher.__aenter__", _noop_aenter), \
          patch("charlotte.core.fetcher.PageFetcher.__aexit__", _noop_aexit), \
          patch("charlotte.core.fetcher.PageFetcher.fetch", _mock_fetch):
