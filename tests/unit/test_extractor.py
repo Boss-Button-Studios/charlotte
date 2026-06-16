@@ -468,3 +468,101 @@ def test_text_zone_order_is_content_neutral_chrome():
     middle_pos = page.text.index("Middle")
     footer_pos = page.text.index("Footer")
     assert article_pos < middle_pos < footer_pos
+
+
+# ---------------------------------------------------------------------------
+# Embedded document sources (iframe, object, embed)
+# ---------------------------------------------------------------------------
+
+def test_iframe_src_extracted_as_link():
+    """An <iframe src> URL is returned in the link list."""
+    html = '<iframe src="https://example.com/bulletin.pdf"></iframe>'
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert "https://example.com/bulletin.pdf" in urls
+
+
+def test_object_data_extracted_as_link():
+    """An <object data> URL is returned in the link list."""
+    html = '<object data="https://example.com/doc.pdf" type="application/pdf"></object>'
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert "https://example.com/doc.pdf" in urls
+
+
+def test_embed_src_extracted_as_link():
+    """An <embed src> URL is returned in the link list."""
+    html = '<embed src="https://example.com/file.pdf" type="application/pdf">'
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert "https://example.com/file.pdf" in urls
+
+
+def test_iframe_title_used_as_link_text():
+    """When <iframe> has a title attribute, it becomes the link text."""
+    html = '<iframe src="https://example.com/bulletin.pdf" title="June Bulletin"></iframe>'
+    page = extract(html, _BASE)
+    match = next(lnk for lnk in page.links if "bulletin.pdf" in lnk["url"])
+    assert match["text"] == "June Bulletin"
+
+
+def test_iframe_without_title_uses_placeholder():
+    """An <iframe> with no title attribute gets the '[embedded document]' placeholder."""
+    html = '<iframe src="https://example.com/bulletin.pdf"></iframe>'
+    page = extract(html, _BASE)
+    match = next(lnk for lnk in page.links if "bulletin.pdf" in lnk["url"])
+    assert match["text"] == "[embedded document]"
+
+
+def test_iframe_src_deduplicated_with_anchor():
+    """If the same URL appears in both <a href> and <iframe src>, only one entry is kept."""
+    url = "https://example.com/bulletin.pdf"
+    html = f'<a href="{url}">Download</a><iframe src="{url}"></iframe>'
+    page = extract(html, _BASE)
+    urls = [lnk["url"] for lnk in page.links]
+    assert urls.count(url) == 1
+
+
+def test_iframe_with_non_http_src_excluded():
+    """<iframe src> with a non-http/https scheme is discarded."""
+    html = '<iframe src="javascript:void(0)"></iframe>'
+    page = extract(html, _BASE)
+    assert page.links == []
+
+
+def test_iframe_relative_src_resolved():
+    """A relative <iframe src> is resolved to an absolute URL."""
+    html = '<iframe src="/uploads/bulletin.pdf"></iframe>'
+    page = extract(html, "https://example.com/page")
+    urls = [lnk["url"] for lnk in page.links]
+    assert "https://example.com/uploads/bulletin.pdf" in urls
+
+
+def test_query_param_doc_url_extracted():
+    """A PDF URL encoded in a query parameter is surfaced as a separate link."""
+    pdf = "https://cdn.example.com/bulletins/2026-06-14.pdf"
+    html = f'<a href="https://viewer.example.com/publication?selectedPublication={pdf}">View</a>'
+    page = extract(html, "https://example.com/")
+    urls = [lnk["url"] for lnk in page.links]
+    assert pdf in urls
+
+
+def test_query_param_non_doc_url_not_extracted():
+    """Query parameter values that are not document URLs are not emitted."""
+    html = '<a href="https://viewer.example.com/page?redirect=https://example.com/about">link</a>'
+    page = extract(html, "https://example.com/")
+    urls = [lnk["url"] for lnk in page.links]
+    assert "https://example.com/about" not in urls
+
+
+def test_query_param_doc_url_inherits_anchor_text():
+    """The inner document URL inherits the anchor text of the outer link."""
+    pdf = "https://cdn.example.com/bulletin.pdf"
+    html = f'<a href="https://viewer.example.com/pub?doc={pdf}">June Bulletin</a>'
+    page = extract(html, "https://example.com/")
+    for lnk in page.links:
+        if lnk["url"] == pdf:
+            assert lnk["text"] == "June Bulletin"
+            break
+    else:
+        pytest.fail("inner PDF URL not found in links")

@@ -11,8 +11,9 @@ import httpx
 import pytest
 import respx
 
-from charlotte.core.fetcher import FetchResult, PageFetcher
+from charlotte.core.fetcher import FetchResult, PageFetcher, _is_bot_challenge
 from charlotte.exceptions import (
+    CharlotteChallengeError,
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteRedirectError,
@@ -62,13 +63,20 @@ def _make_playwright_fetcher(
     final_url: str | None = None,
     side_effect: Exception | None = None,
 ) -> tuple["PageFetcher", MagicMock]:
-    """Build a PageFetcher with a mocked playwright factory and return (fetcher, mock_pw)."""
+    """Build a PageFetcher with a mocked playwright factory and return (fetcher, mock_pw).
+
+    The mock chain: mock_factory() → mock_cm (__aenter__ → mock_pw)
+    → mock_pw.chromium.launch() → mock_browser → mock_browser.new_page() → mock_page.
+    Both the context manager path (shared browser) and per-call path use the same chain.
+    """
     mock_response = MagicMock()
     mock_response.status = status
 
     mock_page = MagicMock()
     mock_page.url = final_url or url
     mock_page.content = AsyncMock(return_value=html)
+    mock_page.close = AsyncMock()
+    mock_page.set_extra_http_headers = AsyncMock()
     if side_effect:
         mock_page.goto = AsyncMock(side_effect=side_effect)
     else:
@@ -133,11 +141,15 @@ async def test_render_js_fetch_ms_is_non_negative():
 
 
 @pytest.mark.asyncio
-async def test_render_js_timeout_raises_charlotte_timeout_error():
-    """Playwright TimeoutError is converted to CharlotteTimeoutError."""
-    fetcher, _ = _make_playwright_fetcher(side_effect=TimeoutError("timed out"))
-    with pytest.raises(CharlotteTimeoutError, match="Render timeout"):
-        await fetcher.fetch("http://example.com/", visited_urls=set())
+async def test_render_js_networkidle_timeout_returns_partial_render():
+    """networkidle timeout is swallowed; page.content() returns the partial render."""
+    fetcher, _ = _make_playwright_fetcher(
+        html="<html><body>partial</body></html>",
+        side_effect=TimeoutError("networkidle timed out"),
+    )
+    result = await fetcher.fetch("http://example.com/", visited_urls=set())
+    assert result.html == "<html><body>partial</body></html>"
+    assert result.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -146,6 +158,38 @@ async def test_render_js_unexpected_error_raises_network_error():
     fetcher, _ = _make_playwright_fetcher(side_effect=RuntimeError("browser crashed"))
     with pytest.raises(CharlotteNetworkError, match="Playwright error"):
         await fetcher.fetch("http://example.com/", visited_urls=set())
+
+
+@pytest.mark.asyncio
+async def test_render_js_pdf_url_uses_playwright_api_context():
+    """When render_js=True, document URLs use Playwright's APIRequestContext
+    (browser-authenticated HTTP request) rather than httpx or page.goto().
+    FetchResult.raw_bytes is populated with the response body."""
+    fetcher, mock_pw = _make_playwright_fetcher(html="<html/>")
+
+    mock_api_response = MagicMock()
+    mock_api_response.status = 200
+    mock_api_response.url = "http://example.com/bulletin.pdf"
+    mock_api_response.body = AsyncMock(return_value=b"%PDF-1.4 content")
+
+    mock_request = MagicMock()
+    mock_request.get = AsyncMock(return_value=mock_api_response)
+
+    mock_ctx = MagicMock()
+    mock_ctx.request = mock_request
+    mock_ctx.close = AsyncMock()
+
+    mock_browser = mock_pw.chromium.launch.return_value
+    mock_browser.new_context = AsyncMock(return_value=mock_ctx)
+
+    with patch("httpx.AsyncClient") as mock_httpx:
+        result = await fetcher.fetch("http://example.com/bulletin.pdf", visited_urls=set())
+
+    mock_httpx.assert_not_called()
+    assert result.raw_bytes == b"%PDF-1.4 content"
+    assert result.status_code == 200
+    assert result.html == ""
+    assert result.url == "http://example.com/bulletin.pdf"
 
 
 @pytest.mark.asyncio
@@ -169,6 +213,69 @@ async def test_render_js_already_visited_final_url_raises_redirect_error():
     visited = {"http://example.com/old"}
     with pytest.raises(CharlotteRedirectError, match="loop"):
         await fetcher.fetch("http://example.com/new", visited_urls=visited)
+
+
+# ---------------------------------------------------------------------------
+# Playwright context manager — shared browser lifecycle
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_context_manager_opens_browser_on_enter():
+    """__aenter__ launches the Chromium browser and stores it as _browser."""
+    fetcher, mock_pw = _make_playwright_fetcher()
+    assert fetcher._browser is None
+    async with fetcher:
+        assert fetcher._browser is mock_pw.chromium.launch.return_value
+
+
+@pytest.mark.asyncio
+async def test_context_manager_closes_browser_on_exit():
+    """__aexit__ closes the browser and resets _browser to None."""
+    fetcher, mock_pw = _make_playwright_fetcher()
+    async with fetcher:
+        pass
+    mock_pw.chromium.launch.return_value.close.assert_awaited_once()
+    assert fetcher._browser is None
+
+
+@pytest.mark.asyncio
+async def test_context_manager_fetch_uses_shared_browser():
+    """fetch() inside async with uses the shared browser — no second launch."""
+    fetcher, mock_pw = _make_playwright_fetcher(html="<p>Shared</p>")
+    async with fetcher:
+        result = await fetcher.fetch("http://example.com/", visited_urls=set())
+    assert result.html == "<p>Shared</p>"
+    mock_pw.chromium.launch.assert_awaited_once()  # browser launched only once
+
+
+@pytest.mark.asyncio
+async def test_context_manager_browser_closed_on_exception():
+    """Browser is closed in __aexit__ even when a fetch inside raises."""
+    fetcher, mock_pw = _make_playwright_fetcher(side_effect=RuntimeError("boom"))
+    with pytest.raises(CharlotteNetworkError):
+        async with fetcher:
+            await fetcher.fetch("http://example.com/", visited_urls=set())
+    mock_pw.chromium.launch.return_value.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_context_manager_noop_when_render_js_false():
+    """async with PageFetcher(render_js=False) is a safe no-op."""
+    fetcher = _fetcher(render_js=False)
+    async with fetcher:
+        pass  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_networkidle_passed_to_page_goto():
+    """_render_page uses wait_until='networkidle' so SPA content is fully rendered."""
+    fetcher, mock_pw = _make_playwright_fetcher()
+    async with fetcher:
+        await fetcher.fetch("http://example.com/", visited_urls=set())
+    mock_browser = mock_pw.chromium.launch.return_value
+    mock_page = mock_browser.new_page.return_value
+    _, kwargs = mock_page.goto.call_args
+    assert kwargs.get("wait_until") == "networkidle"
 
 
 # ---------------------------------------------------------------------------
@@ -513,3 +620,49 @@ async def test_cross_domain_redirect_robots_blocked_raises():
             robots_handler=_BlockingRobots(),
             default_delay=0.0,
         )
+
+
+# ---------------------------------------------------------------------------
+# Anti-bot challenge detection (honour refusal, don't evade)
+# ---------------------------------------------------------------------------
+
+# Trimmed from a real Cloudflare interstitial served by holyspiritsd.com (2026-06-16).
+_CF_CHALLENGE_BODY = (
+    '<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>'
+    '<meta http-equiv="content-security-policy" content="default-src \'none\'; '
+    'script-src \'nonce-x\' \'unsafe-eval\' https://challenges.cloudflare.com">'
+    '</head><body>Enable JavaScript and cookies to continue</body></html>'
+)
+
+
+def test_is_bot_challenge_detects_cloudflare_interstitial():
+    """A Cloudflare 'Just a moment' 403 body is recognised as a challenge."""
+    assert _is_bot_challenge(403, _CF_CHALLENGE_BODY) is True
+    # Cloudflare sometimes serves the challenge with 503 or even 200.
+    assert _is_bot_challenge(503, _CF_CHALLENGE_BODY) is True
+    assert _is_bot_challenge(200, _CF_CHALLENGE_BODY) is True
+
+
+def test_is_bot_challenge_ignores_normal_content():
+    """Ordinary pages — even a plain 403 — are not misread as challenges."""
+    assert _is_bot_challenge(200, "<html><body>Welcome to our parish</body></html>") is False
+    assert _is_bot_challenge(403, "<html><body>Forbidden: you lack permission</body></html>") is False
+    # A 404 is never sniffed for challenge markers.
+    assert _is_bot_challenge(404, _CF_CHALLENGE_BODY) is False
+
+
+def test_is_bot_challenge_hcaptcha_marker():
+    """hCaptcha interstitials are also recognised."""
+    body = '<html><body><div class="h-captcha" data-sitekey="x"></div></body></html>'
+    assert _is_bot_challenge(403, body) is True
+
+
+@respx.mock
+async def test_httpx_fetch_raises_challenge_error_on_interstitial():
+    """The httpx path raises CharlotteChallengeError (not a generic network error)
+    when a site serves a bot-challenge, so the engine can honour the refusal."""
+    respx.get(f"{_BASE}/bulletin").mock(
+        return_value=httpx.Response(403, text=_CF_CHALLENGE_BODY)
+    )
+    with pytest.raises(CharlotteChallengeError, match="declines automated access"):
+        await _fetcher().fetch(f"{_BASE}/bulletin", visited_urls=set())

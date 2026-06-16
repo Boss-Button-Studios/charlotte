@@ -576,3 +576,30 @@ async def test_existence_mode_score_is_none():
     v = _verifier(mode="existence")
     result, _ = await v(url=_URL, goal_context=_ctx())
     assert result.score is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_document_link_html_response_fails():
+    """For document_link goals the result must be a binary file.  An HTML response
+    means the model stopped at a listing page rather than the document itself."""
+    respx.get(_URL).mock(return_value=httpx.Response(
+        200, content=_RELEVANT_HTML, headers={"Content-Type": "text/html; charset=UTF-8"},
+    ))
+    v = _verifier()
+    result, content = await v(url=_URL, goal_context=_ctx(goal_type="document_link"))
+    assert result.passed is False
+    assert result.reason == "html_not_document"
+    assert content is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_non_document_link_html_response_passes_relevance():
+    """The html_not_document guard must not fire for non-document_link goals."""
+    respx.get(_URL).mock(return_value=httpx.Response(
+        200, content=_RELEVANT_HTML, headers={"Content-Type": "text/html; charset=UTF-8"},
+    ))
+    v = _verifier()
+    result, _ = await v(url=_URL, goal_context=_ctx(goal_type="navigation"))
+    assert result.passed is True
