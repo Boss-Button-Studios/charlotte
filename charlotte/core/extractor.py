@@ -7,6 +7,10 @@ Converts sanitized HTML into the two structures the navigator model needs:
     included, deduplicated via normalized comparison, sorted by structural zone,
     capped at max_links)
 
+Links are sourced from <a href>, <iframe src>, <object data>, and <embed src>
+elements. The last three surface documents embedded via PDF viewer plugins,
+which would otherwise be invisible to the model.
+
 The extractor operates on already-sanitized HTML. It is not responsible for
 security — that is the sanitizer's job (spec §9.1). Its only concern is
 producing a clean, compact, useful representation for the model.
@@ -23,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -32,6 +36,13 @@ from charlotte.exceptions import CharlotteConfigError, CharlotteInternalError
 
 _DEFAULT_MAX_TEXT_CHARS: int = 16_384
 _DEFAULT_MAX_LINKS: int = 5_000
+
+# Document extensions recognised when extracting URLs embedded in query parameters.
+# Catches publication-viewer patterns like parishesonline.com's
+# ?selectedPublication=https://cdn.../bulletin.pdf.
+_DOC_QUERY_EXTS: frozenset[str] = frozenset({
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+})
 
 # HTML elements whose presence as an ancestor determines node priority.
 # Walking from the node up the tree, the first matching ancestor wins.
@@ -106,11 +117,14 @@ def extract(
     page-specific content (e.g. a department phone number) appears before
     global chrome (e.g. a general hospital number in the site header).
 
-    Link extraction: every <a href="..."> is resolved to an absolute URL,
-    filtered to http/https only, deduplicated using normalized URL comparison,
-    sorted by structural zone (content before chrome), and capped at
-    max_links entries. Domain filtering is the engine's job -- the extractor
-    returns all observable links so the model can evaluate them.
+    Link extraction: every <a href>, <iframe src>, <object data>, and
+    <embed src> is resolved to an absolute URL, filtered to http/https only,
+    deduplicated using normalized URL comparison, sorted by structural zone
+    (content before chrome), and capped at max_links entries. Embedded
+    sources (iframe/object/embed) surface PDFs loaded via viewer plugins
+    that never appear as navigable anchors. Domain filtering is the engine's
+    job -- the extractor returns all observable links so the model can
+    evaluate them.
 
     Args:
         html:            Sanitized HTML string from the Layer 1 sanitizer.
@@ -167,6 +181,53 @@ def extract(
                 r"[ \t]+", " ", anchor.get_text(separator=" ", strip=True)
             ).strip()
             candidates.append((_node_zone(anchor), link_text, resolved, norm))
+
+        # --- Embedded document sources (iframe, object, embed) ---
+        # PDF viewer plugins embed documents using these elements rather than
+        # plain <a> links, making the PDF URL invisible to anchor-only extraction.
+        # Text label uses the element's title attribute when set; falls back to a
+        # generic placeholder so the link ranker can score the URL path instead.
+        for _tag, _attr in (("iframe", "src"), ("object", "data"), ("embed", "src")):
+            for elem in soup.find_all(_tag, **{_attr: True}):
+                src = elem.get(_attr, "").strip()
+                if not src:
+                    continue
+                resolved = _resolve_href(src, page_url)
+                if resolved is None:
+                    continue
+                try:
+                    norm = normalize_url(resolved)
+                except CharlotteConfigError:
+                    continue
+                label = elem.get("title", "").strip() or "[embedded document]"
+                candidates.append((_node_zone(elem), label, resolved, norm))
+
+        # --- Document URLs embedded in query parameters ---
+        # Some publication-viewer pages (e.g. parishesonline.com's
+        # /publication-page/?selectedPublication=https://...pdf) encode the real
+        # document URL as a query parameter. Extract those inner URLs so the model
+        # can navigate directly to the document rather than through the viewer.
+        for _zone, _qlabel, _qurl, _ in list(candidates):
+            _qs = urlsplit(_qurl).query
+            if not _qs:
+                continue
+            for _pvals in parse_qs(_qs, keep_blank_values=False).values():
+                for _pval in _pvals:
+                    _inner = unquote(_pval)
+                    if not _inner.startswith(("http://", "https://")):
+                        continue
+                    _filename = _inner.rsplit("/", 1)[-1].rsplit("?", 1)[0]
+                    _ext = _filename.rsplit(".", 1)[-1].lower() if "." in _filename else ""
+                    if _ext not in _DOC_QUERY_EXTS:
+                        continue
+                    _inner_resolved = _resolve_href(_inner, page_url)
+                    if _inner_resolved is None:
+                        continue
+                    try:
+                        _inner_norm = normalize_url(_inner_resolved)
+                    except CharlotteConfigError:
+                        continue
+                    candidates.append((_zone, _qlabel or "[embedded document]", _inner_resolved, _inner_norm))
 
         # Stable sort preserves DOM order within each zone.
         candidates.sort(key=lambda c: c[0])

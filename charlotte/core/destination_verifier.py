@@ -311,6 +311,15 @@ class DefaultDestinationVerifier:
             content = self._build_content(body, content_type, etag, suggested_filename) if capture else None
             return result, content
 
+        # document_link goals require a binary file — reject HTML pages outright.
+        # An HTML result_url means the model stopped at a listing page rather than
+        # the document itself; forcing a fail here sends Charlotte back to navigate.
+        if goal_context.goal_type == "document_link" and html:
+            return (
+                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="html_not_document"),
+                None,
+            )
+
         # Binary (non-HTML) responses cannot be relevance-scored; fall back to existence.
         # PDFs, ZIPs, and other binary files have no extractable text for BM25/embeddings.
         if not html:

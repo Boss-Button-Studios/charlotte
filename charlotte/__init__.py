@@ -18,6 +18,7 @@ from charlotte.core.goal_context_cache import AutoPreprocessor
 from charlotte.core.goal_preprocessor import DeterministicPreprocessor, HybridPreprocessor
 from charlotte.exceptions import (
     AdapterOutputError,
+    CharlotteChallengeError,
     CharlotteConfigError,
     CharlotteError,
     CharlotteInternalError,
@@ -106,6 +107,7 @@ __all__ = [
     "CharlotteSSRFError",
     "CharlotteResponseTooLargeError",
     "RobotsError",
+    "CharlotteChallengeError",
     "AdapterOutputError",
     "CharlotteInternalError",
     # Version

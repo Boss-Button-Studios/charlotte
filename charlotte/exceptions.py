@@ -62,6 +62,19 @@ class RobotsError(CharlotteError):
     """
 
 
+class CharlotteChallengeError(CharlotteError):
+    """An active bot-challenge (e.g. Cloudflare 'Just a moment', hCaptcha) was served.
+
+    Not a failure — a policy result, like RobotsError. The site has interposed a
+    challenge that only a human-driven or disguised browser can clear, which is a
+    de-facto refusal of identified automated access. Charlotte honours that refusal
+    rather than circumventing it: it never spoofs identity, forges a fingerprint, or
+    solves a human-challenge to convert a 'no' into a 'yes'. Handled internally by
+    skipping the page with a plain-language 'site declines automated access' reason
+    and continuing the crawl. See the trust model in CLAUDE.md and spec §18.
+    """
+
+
 class AdapterOutputError(CharlotteError):
     """Model output failed schema validation after two attempts.
 

@@ -12,7 +12,16 @@ All output goes under crawl_logs/bulletins/<timestamp>/:
     _summary.json             — pass/fail table for the whole run
 
 Usage:
-    python3 scripts/parish_bulletin_test.py
+    .venv/bin/python scripts/parish_bulletin_test.py
+
+Note: parishes with render_js=True require the project virtualenv (Playwright 1.60.0).
+The system python3 ships Playwright 1.55.0+ds which is incompatible and will raise
+CharlotteConfigError. Playwright's Chromium binary must be installed:
+    PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 \\
+        .venv/bin/python -m playwright install chromium
+Required system libs (install once):
+    sudo apt-get install -y libatk1.0-0t64 libatk-bridge2.0-0t64 \\
+                            libasound2t64 libatspi2.0-0t64
 """
 
 from __future__ import annotations
@@ -27,6 +36,10 @@ from time import monotonic
 import charlotte
 from charlotte import crawl
 from charlotte.adapters.local import LocalAdapter
+
+# Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
+# The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
+CHROMIUM_EXECUTABLE: str | None = None
 from charlotte.models import (
     BudgetExhausted,
     CrawlComplete,
@@ -54,13 +67,13 @@ NAVIGATION_HINT = (
     "Look for a link labelled 'bulletin', 'weekly bulletin', 'parish bulletin', "
     "or 'newsletter'. It is usually a PDF file. Download it. "
     "Parish bulletins are published in advance for the coming Sunday, so the most "
-    "recent bulletin may carry a date up to 7 days in the future — that is correct."
+    "recent bulletin may carry a date up to 7 days in the future — that is correct. "
+    "If the most recent available bulletin is several weeks old, accept it — not all "
+    "parishes publish on schedule. Accept the most recently available one regardless "
+    "of date."
 )
 
 PARISHES = [
-    # marystarlajolla.org: bulletins hosted on parishesonline.com (JS-only SPA),
-    # unreachable without Playwright. Removed until JS rendering is added.
-    #
     # sanluisreyparish.org: /bulletins/ → blog post → Google Drive /view link.
     # Google Drive requires auth; verifier will reject. Same class as parishesonline.com.
     # Left out until JS/auth-wall handling is added.
@@ -70,14 +83,32 @@ PARISHES = [
         "url":  "https://stannesd.com/",
     },
     {
+        # Bulletins are hosted on parishesonline.com (JS-only SPA). render_js=True
+        # renders the homepage so Playwright can follow the off-domain bulletin link.
+        # allowed_domains explicitly includes parishesonline.com so the engine can
+        # follow the cross-domain link.
         "name": "St. John of the Cross",
         "slug": "st_john_cross_lg",
         "url":  "https://www.sjcparishlg.org/",
+        "render_js": True,
+        "allowed_domains": ["sjcparishlg.org", "parishesonline.com"],
     },
     {
+        # Wix SPA: navigation links are JS-rendered and invisible to httpx.
+        # render_js=True lets Playwright render the full page before extraction.
+        # Bulletins are hosted on parishesonline.com; allowed_domains includes it
+        # so the engine can follow the cross-domain Bulletin link.
+        # wixstatic.com is included because Wix sometimes renders the bulletin
+        # PDF as a direct wixstatic.com link rather than the parishesonline.com
+        # embedded widget; without it the engine domain-filters the link and
+        # finds nothing on that render.
+        # render_timeout raised to 30 s — the Wix widget needs extra settle time.
         "name": "St. Martin of Tours",
         "slug": "st_martin_tours_tlm",
         "url":  "https://www.smtlm.org/",
+        "render_js": True,
+        "render_timeout": 30.0,
+        "allowed_domains": ["smtlm.org", "parishesonline.com", "wixstatic.com"],
     },
     {
         "name": "Our Lady of Guadalupe",
@@ -92,12 +123,27 @@ PARISHES = [
         "url":  "https://www.holyangelssandiego.com/",
     },
     {
-        # /bulletin/ shows a date grid with direct PDF links. Site is behind on
-        # uploads — most recent available PDF is well past the current date.
-        # Charlotte should retrieve whichever PDF is actually there and latest.
+        # /bulletin/ shows a date grid with direct PDF links. Returned 403 on
+        # previous plain-httpx run — render_js=True presents a full browser UA
+        # which may satisfy the bot-detection check.
+        # Site is also behind on uploads; Charlotte should retrieve whatever is latest.
         "name": "Holy Spirit",
         "slug": "holy_spirit_sd",
         "url":  "https://holyspiritsd.com/",
+        "render_js": True,
+    },
+    # marystarlajolla.org: bulletins hosted on parishesonline.com (JS-only SPA).
+    # Enabled now that render_js is available.
+    # render_timeout raised to 30 s — the parishesonline.com embedded bulletin
+    # widget sometimes loads the wrong (cached) bulletin at 15 s; extra time
+    # lets it settle to the current week's PDF.
+    {
+        "name": "Mary Star of the Sea",
+        "slug": "mary_star_lj",
+        "url":  "https://marystarlajolla.org/",
+        "render_js": True,
+        "render_timeout": 30.0,
+        "allowed_domains": ["marystarlajolla.org", "parishesonline.com"],
     },
 ]
 
@@ -135,11 +181,15 @@ async def run_parish(
 
     run_start = monotonic()
 
+    js_flag = "  [render_js]" if parish.get("render_js") else ""
     print(f"\n{'─' * 64}", flush=True)
-    print(f"  {parish['name']:<30}  {parish['url']}", flush=True)
+    print(f"  {parish['name']:<30}  {parish['url']}{js_flag}", flush=True)
     print(f"{'─' * 64}", flush=True)
 
     try:
+        render_js = parish.get("render_js", False)
+        allowed_domains = parish.get("allowed_domains")
+        render_timeout = parish.get("render_timeout", 15.0)
         gen = crawl(
             parish["url"],
             GOAL,
@@ -151,7 +201,12 @@ async def run_parish(
             stream=True,
             default_delay=1.5,
             result_to_file=parish_dir,
-            max_result_bytes=50 * 1024 * 1024,  # 50 MB; default 10 MB too small for some bulletins
+            max_result_bytes=50 * 1024 * 1024,   # 50 MB; default 10 MB too small for some bulletins
+            max_response_bytes=50 * 1024 * 1024, # match — PDFs may be in links_to_follow (engine fetcher)
+            render_js=render_js,
+            render_timeout=render_timeout,
+            chromium_executable=CHROMIUM_EXECUTABLE if render_js else None,
+            allowed_domains=allowed_domains,
         )
 
         async for event in gen:
