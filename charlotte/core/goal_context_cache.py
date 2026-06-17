@@ -72,14 +72,21 @@ class InMemoryGoalContextCache:
 # ---------------------------------------------------------------------------
 
 class AutoPreprocessor:
-    """Zero-config preprocessor: fast for navigation, smart for fact goals.
+    """Zero-config preprocessor: fast for navigation/document goals, smart for facts.
 
-    Runs DeterministicPreprocessor first for a free goal-type signal.
-    Navigation goals return immediately with no model call. Fact-type goals
-    (freeform_fact, phone_extraction, etc.) escalate to HybridPreprocessor
-    for synonym expansion and better classification. Falls back silently to
-    the deterministic result if the model call fails.
+    Runs DeterministicPreprocessor first for a free goal-type signal. Goal types
+    whose ranking rides on a handful of concrete anchor terms — ``navigation`` and
+    ``document_link`` (e.g. "find the latest bulletin PDF") — return immediately
+    with no model call: the deterministic anchors already carry them, as the parish
+    field runs confirmed, and skipping the model removes a per-crawl call that was
+    ~27% of all model calls there. Fact-type goals (freeform_fact,
+    phone_extraction, etc.) still escalate to HybridPreprocessor for synonym
+    expansion and better classification, falling back silently to the deterministic
+    result if the model call fails.
     """
+
+    # Goal types served by the deterministic anchors alone — no model escalation.
+    _FAST_GOAL_TYPES: frozenset[str] = frozenset({"navigation", "document_link"})
 
     model_id: str | None
 
@@ -93,6 +100,6 @@ class AutoPreprocessor:
 
     def __call__(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
         ctx = self._deterministic(goal, navigation_hint, locale)
-        if ctx.goal_type == "navigation":
+        if ctx.goal_type in self._FAST_GOAL_TYPES:
             return ctx
         return self._hybrid(goal, navigation_hint, locale)
