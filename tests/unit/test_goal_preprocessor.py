@@ -1,16 +1,16 @@
 """Unit tests for DeterministicPreprocessor, HybridPreprocessor, and InMemoryGoalContextCache."""
 
 import json
+from datetime import date
 
 import httpx
 import pytest
 import respx
 
+from charlotte.core.goal_context_cache import AutoPreprocessor, InMemoryGoalContextCache
 from charlotte.core.goal_preprocessor import (
-    AutoPreprocessor,
     DeterministicPreprocessor,
     HybridPreprocessor,
-    InMemoryGoalContextCache,
     _clean_model_json,
     _extract_json,
 )
@@ -699,3 +699,32 @@ def test_auto_fact_goal_falls_back_on_hybrid_failure():
 def test_auto_model_id_matches_hybrid_model():
     p = AutoPreprocessor()
     assert p.model_id == p._hybrid.model_id
+
+
+# ---------------------------------------------------------------------------
+# reference_date injection
+# ---------------------------------------------------------------------------
+
+def test_reference_date_set_for_temporal_goal():
+    ctx = _PREPROCESSOR("Find the latest weekly bulletin PDF", None, "en")
+    assert ctx.reference_date == date.today()
+
+
+def test_reference_date_set_for_recent_in_hint():
+    ctx = _PREPROCESSOR("Find the bulletin", "Download the most recent issue.", "en")
+    assert ctx.reference_date == date.today()
+
+
+def test_reference_date_none_for_nontemporal_goal():
+    ctx = _PREPROCESSOR("Find the contact page", None, "en")
+    assert ctx.reference_date is None
+
+
+def test_reference_date_set_for_current():
+    ctx = _PREPROCESSOR("What is the current price?", None, "en")
+    assert ctx.reference_date == date.today()
+
+
+def test_reference_date_set_for_upcoming():
+    ctx = _PREPROCESSOR("Find upcoming events", None, "en")
+    assert ctx.reference_date == date.today()

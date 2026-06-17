@@ -6,6 +6,11 @@ When render_js=True, uses Playwright (headless Chromium) instead of httpx.
 Playwright is an optional dependency — CharlotteConfigError is raised at
 PageFetcher instantiation time if it is not installed.
 
+PageFetcher supports the async context manager protocol. When render_js=True,
+use it as ``async with PageFetcher(...) as fetcher:`` to share one browser
+across all fetches in the crawl. This avoids the ~2 s per-launch overhead.
+Calling fetch() outside a context manager still works (per-call browser launch).
+
 Public classes: FetchResult, PageFetcher
 Public helpers: _import_playwright (used by engine for early availability check)
 """
@@ -23,6 +28,7 @@ import httpx
 from charlotte.config import HTTP_USER_AGENT
 from charlotte.core.normalizer import normalize_url, validate_url_safety
 from charlotte.exceptions import (
+    CharlotteChallengeError,
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteRedirectError,
@@ -34,7 +40,52 @@ from charlotte.exceptions import (
 if TYPE_CHECKING:
     from charlotte.core.robots import RobotsHandler
 
+# URL path extensions that belong to downloadable documents rather than web pages.
+# These can't be loaded with Playwright's page.goto() (Chromium renders them inline
+# or starts a download); when render_js=True they are fetched via Playwright's
+# APIRequestContext instead, and via httpx otherwise.
+_DOCUMENT_EXTENSIONS: frozenset[str] = frozenset({
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+})
+
 _MAX_REDIRECTS: int = 5
+
+# High-precision markers of an active anti-bot challenge interstitial (Cloudflare
+# "Just a moment", Turnstile, hCaptcha, generic JS challenges). These are checked
+# only against the *start* of a small response body, and only on the statuses
+# challenges use (403/429/503) plus the Cloudflare 200-with-challenge case, so the
+# odds of a false positive on real page content are negligible. When matched,
+# Charlotte treats the site as declining identified automated access and stops —
+# it does not try to solve or evade the challenge. See CharlotteChallengeError.
+_CHALLENGE_MARKERS: tuple[str, ...] = (
+    "challenges.cloudflare.com",
+    "/cdn-cgi/challenge-platform/",
+    "just a moment...",
+    "cf-browser-verification",
+    "_cf_chl_opt",
+    "checking your browser before accessing",
+    "enable javascript and cookies to continue",
+    "window._cf_chl_opt",
+    "/hcaptcha.com/",
+    "h-captcha",
+)
+# Only sniff the body when the status is one challenges actually use. Cloudflare's
+# interstitial is most often served with 403/503/429, occasionally 200.
+_CHALLENGE_STATUSES: frozenset[int] = frozenset({200, 403, 429, 503})
+
+
+def _is_bot_challenge(status_code: int, body_text: str) -> bool:
+    """True if a response looks like an active anti-bot challenge interstitial.
+
+    Conservative by design: requires both a challenge-typical status code and a
+    high-precision body marker, matched case-insensitively against the first few
+    kilobytes only. Used to honour a site's refusal of automated access rather
+    than circumvent it (CharlotteChallengeError).
+    """
+    if status_code not in _CHALLENGE_STATUSES:
+        return False
+    head = body_text[:4096].lower()
+    return any(marker in head for marker in _CHALLENGE_MARKERS)
 
 
 def _import_playwright() -> tuple:
@@ -56,6 +107,18 @@ def _import_playwright() -> tuple:
         ) from exc
 
 
+def _is_document_url(url: str) -> bool:
+    """True when the URL path ends with a document extension (e.g. .pdf).
+
+    Document URLs must be fetched with httpx even when render_js=True.
+    Playwright raises 'Download is starting' when navigating to binary content
+    and cannot render the response as HTML.
+    """
+    path = urlsplit(url).path
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
+    return ext in _DOCUMENT_EXTENSIONS
+
+
 @dataclass
 class FetchResult:
     """Result of a single page fetch, including redirect history."""
@@ -65,6 +128,9 @@ class FetchResult:
     status_code: int
     fetch_ms: int
     redirect_chain: list[tuple[int, str]] = field(default_factory=list)
+    # Set when a binary document was fetched via Playwright APIRequestContext
+    # (render_js=True). Empty / absent on the httpx path and for HTML pages.
+    raw_bytes: bytes | None = None
 
 
 class PageFetcher:
@@ -107,6 +173,10 @@ class PageFetcher:
             factory, timeout_err = _import_playwright()
             self._playwright_factory = factory
             self._playwright_timeout_error = timeout_err
+        # Shared Playwright state — set by __aenter__, cleared by __aexit__.
+        # None when not using the context manager (per-call browser launch path).
+        self._browser = None
+        self._pw_cm = None
         self._allowed_domains: frozenset[str] = frozenset(d.lower() for d in allowed_domains)
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
@@ -156,11 +226,26 @@ class PageFetcher:
         await asyncio.sleep(self._polite_delay)
 
         if self._render_js:
-            # Hard ceiling on the entire Playwright operation: browser launch +
-            # page navigation + content capture. render_timeout only covers
-            # page.goto(); on a resource-starved machine the browser launch
-            # itself can hang indefinitely without this outer guard.
-            _total_pw_timeout = self._connect_timeout + self._render_timeout + 30
+            # Hard ceiling that covers browser launch + network + render time.
+            # When using the context manager (shared browser), launch cost is excluded.
+            _launch_cost = 0 if self._browser is not None else 30
+            _total_pw_timeout = self._connect_timeout + self._render_timeout + _launch_cost
+            if _is_document_url(url):
+                # Binary documents can't be navigated to via page.goto() — Chromium
+                # renders PDFs inline or triggers a download. Use APIRequestContext
+                # instead: a browser-authenticated HTTP request that bypasses
+                # bot-detection headers checks without page rendering.
+                try:
+                    return await asyncio.wait_for(
+                        self._fetch_document_with_playwright(url, visited_urls=visited_urls),
+                        timeout=_total_pw_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    raise CharlotteTimeoutError(
+                        f"Playwright document fetch of {url!r} timed out after "
+                        f"{_total_pw_timeout:.0f}s"
+                    )
+            _suffix = "" if _launch_cost == 0 else " (including browser launch)"
             try:
                 return await asyncio.wait_for(
                     self._fetch_with_playwright(url, visited_urls=visited_urls),
@@ -169,7 +254,7 @@ class PageFetcher:
             except asyncio.TimeoutError:
                 raise CharlotteTimeoutError(
                     f"Playwright fetch of {url!r} timed out after "
-                    f"{_total_pw_timeout:.0f}s (browser launch + navigation)"
+                    f"{_total_pw_timeout:.0f}s{_suffix}"
                 )
 
         timeout = httpx.Timeout(
@@ -247,6 +332,11 @@ class PageFetcher:
                         html = b"".join(chunks).decode(
                             response.encoding or "utf-8", errors="replace"
                         )
+                        if _is_bot_challenge(response.status_code, html):
+                            raise CharlotteChallengeError(
+                                f"{current_url!r} is behind an anti-bot challenge — "
+                                "site declines automated access"
+                            )
                         return FetchResult(
                             url=current_url,
                             html=html,
@@ -254,7 +344,12 @@ class PageFetcher:
                             fetch_ms=int((time.monotonic() - start) * 1000),
                             redirect_chain=redirect_chain,
                         )
-                except (CharlotteResponseTooLargeError, CharlotteRedirectError, RobotsError):
+                except (
+                    CharlotteResponseTooLargeError,
+                    CharlotteRedirectError,
+                    CharlotteChallengeError,
+                    RobotsError,
+                ):
                     raise
                 except httpx.ConnectTimeout as exc:
                     raise CharlotteTimeoutError(
@@ -277,49 +372,217 @@ class PageFetcher:
                         f"Request failed for {current_url!r}: {exc}"
                     ) from exc
 
-    async def _fetch_with_playwright(
+    async def _fetch_document_with_playwright(
         self, url: str, *, visited_urls: set[str]
     ) -> FetchResult:
-        """Fetch a JS-rendered page using headless Chromium via Playwright.
+        """Fetch a binary document using Playwright's APIRequestContext.
 
-        Launches a fresh browser per call (no cross-request session state).
-        Waits for network activity to settle before capturing the DOM.
-        Redirects are followed by Playwright automatically; the final URL is
-        validated against allowed_domains and visited_urls after navigation.
+        When render_js=True, document URLs (PDFs, etc.) cannot be navigated to
+        via page.goto() — Chromium either renders them inline or triggers a
+        download. APIRequestContext issues the HTTP request through Chromium's
+        network stack with the configured (identified) User-Agent. The caller
+        receives status_code and raw_bytes; html is always empty for binary content.
+
+        Note: this is a *fresh* request context — it does not carry cookies or a
+        cleared challenge from any prior page render, so it does not defeat an
+        active anti-bot challenge (e.g. Cloudflare). That is deliberate: Charlotte
+        honours such refusals (CharlotteChallengeError) rather than circumventing
+        them. Sites that merely require a real JS runtime (Wix SPAs, etc.) still
+        work because the document itself is a plain file request.
         """
+        validate_url_safety(url)
         start = time.monotonic()
+
+        async def _do_request(browser) -> tuple[int, str, bytes]:
+            context = await browser.new_context(
+                extra_http_headers={"User-Agent": self._user_agent}
+            )
+            try:
+                resp = await context.request.get(
+                    url,
+                    timeout=(self._connect_timeout + self._render_timeout) * 1000,
+                )
+                body = await resp.body()
+                return resp.status, resp.url, body
+            finally:
+                await context.close()
+
         try:
-            async with self._playwright_factory() as pw:
-                launch_kwargs: dict = {"headless": True}
-                if self._chromium_executable:
-                    launch_kwargs["executable_path"] = self._chromium_executable
-                browser = await pw.chromium.launch(**launch_kwargs)
-                try:
-                    page = await browser.new_page()
-                    response = await page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=self._render_timeout * 1000,
-                    )
-                    html = await page.content()
-                    if len(html.encode()) > self._max_response_bytes:
-                        raise CharlotteResponseTooLargeError(
-                            f"Rendered page from {url!r} exceeded "
-                            f"{self._max_response_bytes // (1024 * 1024)} MB limit"
-                        )
-                    final_url = page.url
-                    status_code = response.status if response is not None else 200
-                finally:
-                    await browser.close()
+            if self._browser is not None:
+                status, final_url, body = await _do_request(self._browser)
+            else:
+                async with self._playwright_factory() as pw:
+                    launch_kwargs: dict = {"headless": True}
+                    if self._chromium_executable:
+                        launch_kwargs["executable_path"] = self._chromium_executable
+                    browser = await pw.chromium.launch(**launch_kwargs)
+                    try:
+                        status, final_url, body = await _do_request(browser)
+                    finally:
+                        await browser.close()
         except self._playwright_timeout_error as exc:
             raise CharlotteTimeoutError(
-                f"Render timeout fetching {url!r}"
+                f"Playwright document fetch of {url!r} timed out"
             ) from exc
         except (
             CharlotteTimeoutError,
             CharlotteNetworkError,
             CharlotteRedirectError,
             CharlotteResponseTooLargeError,
+            CharlotteChallengeError,
+        ):
+            raise
+        except Exception as exc:
+            raise CharlotteNetworkError(
+                f"Playwright document fetch error for {url!r}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        # A challenge interstitial comes back as a small HTML body in place of the
+        # document. Detect it before the size/domain checks so the refusal is
+        # reported honestly rather than as a generic failure.
+        if _is_bot_challenge(status, body[:4096].decode("utf-8", errors="replace")):
+            raise CharlotteChallengeError(
+                f"{url!r} is behind an anti-bot challenge — site declines automated access"
+            )
+
+        if len(body) > self._max_response_bytes:
+            raise CharlotteResponseTooLargeError(
+                f"Downloaded document from {url!r} exceeded "
+                f"{self._max_response_bytes // (1024 * 1024)} MB limit"
+            )
+        if not self._is_allowed(final_url):
+            raise CharlotteRedirectError(
+                f"Redirect from {url!r} to {final_url!r} crosses into "
+                f"disallowed domain {self._hostname(final_url)!r}"
+            )
+        try:
+            norm_final = normalize_url(final_url)
+        except CharlotteConfigError as exc:
+            raise CharlotteRedirectError(
+                f"Redirect destination {final_url!r} is not a valid URL: {exc}"
+            ) from exc
+        if norm_final in visited_urls:
+            raise CharlotteRedirectError(
+                f"Redirect loop detected: {final_url!r} already visited"
+            )
+
+        return FetchResult(
+            url=final_url,
+            html="",
+            status_code=status,
+            fetch_ms=int((time.monotonic() - start) * 1000),
+            raw_bytes=body if (200 <= status < 300) else None,
+        )
+
+    async def __aenter__(self) -> "PageFetcher":
+        """Launch a shared browser when render_js=True; no-op otherwise."""
+        if self._render_js:
+            self._pw_cm = self._playwright_factory()
+            try:
+                pw = await self._pw_cm.__aenter__()
+            except Exception as exc:
+                self._pw_cm = None
+                raise CharlotteConfigError(
+                    "Playwright failed to initialise — the installed version may be "
+                    "incompatible with the browser binary. "
+                    "Try running with the project virtual environment: "
+                    f".venv/bin/python <script>. Underlying error: {exc}"
+                ) from exc
+            try:
+                launch_kwargs: dict = {"headless": True}
+                if self._chromium_executable:
+                    launch_kwargs["executable_path"] = self._chromium_executable
+                self._browser = await pw.chromium.launch(**launch_kwargs)
+            except Exception as exc:
+                await self._pw_cm.__aexit__(type(exc), exc, exc.__traceback__)
+                self._pw_cm = None
+                raise CharlotteConfigError(
+                    f"Playwright browser launch failed: {exc}. "
+                    "If using chromium_executable, verify the path points to the "
+                    "real binary, not a snap stub (e.g. use "
+                    "/snap/chromium/current/usr/lib/chromium-browser/chrome)."
+                ) from exc
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Close the shared browser and Playwright context."""
+        if self._browser is not None:
+            await self._browser.close()
+            self._browser = None
+        if self._pw_cm is not None:
+            await self._pw_cm.__aexit__(exc_type, exc_val, exc_tb)
+            self._pw_cm = None
+
+    async def _render_page(self, browser, url: str) -> tuple:
+        """Open a fresh page in browser, navigate to url, and return (html, final_url, status).
+
+        Sets Charlotte's User-Agent so server-side logs see the same identifier
+        as the httpx path. Prefers networkidle so SPA content is fully rendered;
+        falls back to whatever has rendered when networkidle never settles (e.g.
+        sites with persistent analytics or social-media background requests).
+        """
+        page = await browser.new_page()
+        try:
+            await page.set_extra_http_headers({"User-Agent": self._user_agent})
+            response = None
+            try:
+                response = await page.goto(
+                    url,
+                    wait_until="networkidle",
+                    timeout=self._render_timeout * 1000,
+                )
+            except self._playwright_timeout_error:
+                # networkidle never settled — capture whatever has rendered.
+                pass
+            html = await page.content()
+            if len(html.encode()) > self._max_response_bytes:
+                raise CharlotteResponseTooLargeError(
+                    f"Rendered page from {url!r} exceeded "
+                    f"{self._max_response_bytes // (1024 * 1024)} MB limit"
+                )
+            status_code = response.status if response is not None else 200
+            # If the headless browser was served a challenge instead of the page
+            # (it could not transparently clear it), honour the refusal.
+            if _is_bot_challenge(status_code, html):
+                raise CharlotteChallengeError(
+                    f"{url!r} is behind an anti-bot challenge — site declines automated access"
+                )
+            return html, page.url, status_code
+        finally:
+            await page.close()
+
+    async def _fetch_with_playwright(
+        self, url: str, *, visited_urls: set[str]
+    ) -> FetchResult:
+        """Fetch a JS-rendered page using headless Chromium via Playwright.
+
+        Uses the shared browser from __aenter__ when available (fast path).
+        Falls back to launching a per-call browser otherwise (backwards-compatible
+        but ~2 s slower per page due to Chromium startup cost).
+        Waits for networkidle so SPA content is fully rendered before capture.
+        """
+        start = time.monotonic()
+        try:
+            if self._browser is not None:
+                html, final_url, status_code = await self._render_page(self._browser, url)
+            else:
+                async with self._playwright_factory() as pw:
+                    launch_kwargs: dict = {"headless": True}
+                    if self._chromium_executable:
+                        launch_kwargs["executable_path"] = self._chromium_executable
+                    browser = await pw.chromium.launch(**launch_kwargs)
+                    try:
+                        html, final_url, status_code = await self._render_page(browser, url)
+                    finally:
+                        await browser.close()
+        except self._playwright_timeout_error as exc:
+            raise CharlotteTimeoutError(f"Render timeout fetching {url!r}") from exc
+        except (
+            CharlotteTimeoutError,
+            CharlotteNetworkError,
+            CharlotteRedirectError,
+            CharlotteResponseTooLargeError,
+            CharlotteChallengeError,
         ):
             raise
         except Exception as exc:

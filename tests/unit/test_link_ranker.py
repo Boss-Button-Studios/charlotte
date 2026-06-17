@@ -1,7 +1,14 @@
 """Unit tests for BM25LinkRanker (spec §5, T-69)."""
 
+from datetime import date, datetime, timezone
+
 from charlotte.core.goal_preprocessor import DeterministicPreprocessor
-from charlotte.core.link_ranker import BM25LinkRanker
+from charlotte.core.link_ranker import (
+    BM25LinkRanker,
+    _extract_date,
+    _temporal_bonus,
+)
+from charlotte.models import GoalContext
 
 _PREPROCESSOR = DeterministicPreprocessor()
 _RANKER = BM25LinkRanker()
@@ -233,4 +240,208 @@ def test_page_stop_word_does_not_boost_noise_link():
     ranked = _RANKER(ctx, links)
     assert ranked[0][0] == "https://docs.python.org/3/library/index.html", (
         f"Expected library/index first, got: {ranked}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Temporal scoring
+# ---------------------------------------------------------------------------
+
+# Fixed reference date for deterministic temporal tests.
+_REF = date(2026, 6, 14)
+
+
+def _ctx_dated(anchor_terms: list[str], ref: date) -> GoalContext:
+    """Minimal GoalContext with a specific reference_date for temporal tests."""
+    return GoalContext(
+        goal="test goal",
+        navigation_hint=None,
+        goal_type="document_link",
+        goal_type_confidence=1.0,
+        synonyms={},
+        anchor_terms=anchor_terms,
+        negative_terms=[],
+        regex_hints=[],
+        description="test",
+        source="deterministic",
+        model_used=None,
+        created_at=datetime.now(timezone.utc),
+        locale="en_US",
+        validation_warnings=[],
+        reference_date=ref,
+    )
+
+
+def test_extract_date_iso_in_url_path():
+    d = _extract_date("", "https://example.com/bulletins/2026-06-14-third-sunday/", _REF)
+    assert d == date(2026, 6, 14)
+
+
+def test_extract_date_mdy_in_url_path():
+    d = _extract_date("", "https://example.com/bulletins/06-14-2026-third-sunday/", _REF)
+    assert d == date(2026, 6, 14)
+
+
+def test_extract_date_named_month_in_anchor():
+    d = _extract_date("June 14th Bulletin", "https://example.com/bulletin/", _REF)
+    assert d == date(2026, 6, 14)
+
+
+def test_extract_date_named_month_year_from_url_path_segment():
+    """Year in a URL path segment (e.g. /2025/06/) should be used for a
+    named-month date with no inline year, overriding _infer_year."""
+    d = _extract_date(
+        "Jun 15",
+        "https://holyspiritsd.com/wp-content/uploads/2025/06/June-15th-Bulletin.pdf",
+        _REF,
+    )
+    assert d == date(2025, 6, 15), f"Expected 2025-06-15 from path year, got {d}"
+
+
+def test_extract_date_named_month_infers_year_when_no_path_year():
+    """'January 4th' with no year anywhere should fall back to _infer_year.
+
+    The URL deliberately has no year path segment, so _extract_date cannot read
+    the year from the path and must infer it via _infer_year (the branch under test).
+    """
+    d = _extract_date(
+        "January 4th Bulletin",
+        "https://holyspiritsd.com/bulletins/January-4th-Bulletin.pdf",
+        _REF,
+    )
+    assert d == date(2026, 1, 4)
+
+
+def test_extract_date_no_date_returns_none():
+    d = _extract_date("Parish History", "https://example.com/parish-history/", _REF)
+    assert d is None
+
+
+def test_extract_date_year_2026_not_misread_as_day():
+    """'June 2026' must not be parsed as June 20 (year digit bleeds into day)."""
+    d = _extract_date("June 2026 Newsletter", "https://example.com/", _REF)
+    # No valid date should be extracted (no day present after "June")
+    assert d is None
+
+
+def test_extract_date_compact_yyyymmdd_in_url():
+    """Compact YYYYMMDD in a parishesonline.com-style filename is parsed correctly."""
+    d = _extract_date(
+        "Bulletin",
+        "https://container.parishesonline.com/bulletins/05/1315/20260614B.pdf",
+        _REF,
+    )
+    assert d == date(2026, 6, 14)
+
+
+def test_extract_date_compact_yyyymmdd_not_in_anchor():
+    """Compact YYYYMMDD is only extracted from the URL path, not anchor text,
+    to avoid false matches on phone numbers or invoice IDs in link labels."""
+    d = _extract_date("20260614 Weekly Update", "https://example.com/bulletin", _REF)
+    # No date in URL path — anchor text compact form should be ignored
+    assert d is None
+
+
+def test_temporal_bonus_zero_days():
+    bonus = _temporal_bonus(date(2026, 6, 14), date(2026, 6, 14))
+    assert bonus == 2.0
+
+
+def test_temporal_bonus_thirty_days():
+    bonus = _temporal_bonus(date(2026, 5, 15), date(2026, 6, 14))
+    # 30-day-old link: bonus should be approximately half of max
+    assert 0.9 < bonus < 1.1, f"Expected ~1.0 at 30 days, got {bonus}"
+
+
+def test_temporal_bonus_none_date_returns_zero():
+    assert _temporal_bonus(None, date(2026, 6, 14)) == 0.0
+
+
+def test_temporal_bonus_old_link_near_zero():
+    """A 180-day-old link should have a very small recency bonus."""
+    bonus = _temporal_bonus(date(2025, 12, 16), date(2026, 6, 14))
+    assert bonus < 0.1, f"Expected near-zero for 180-day-old link, got {bonus}"
+
+
+def test_temporal_recent_dated_url_beats_high_bm25_nav():
+    """St. Anne scenario: June 14 post (no BM25 signal) outranks 'Parish History'
+    (~1.43 BM25) because the recency bonus exceeds the BM25 gap."""
+    ctx = _ctx_dated(["bulletin", "parish", "pdf"], _REF)
+    links = [
+        # Recent post: date in URL, no BM25 keywords in URL or anchor.
+        {"text": "Third Sunday of Ordinary Time",
+         "url": "https://stannesd.com/2026/06/14/third-sunday-of-ordinary-time/"},
+        # Nav link: "parish" in both anchor and URL → BM25 ~1.43, no date.
+        {"text": "Parish History", "url": "https://stannesd.com/parish-history/"},
+    ]
+    ranked = _RANKER(ctx, links)
+    urls = [url for url, _ in ranked]
+    assert urls[0] == "https://stannesd.com/2026/06/14/third-sunday-of-ordinary-time/", (
+        f"Recent dated URL should rank first, got: {ranked}"
+    )
+
+
+def test_temporal_newest_pdf_ranked_first():
+    """Holy Spirit scenario: May 17 PDF outranks January 4 PDF despite identical
+    BM25 scores because it is more recent."""
+    ctx = _ctx_dated(["bulletin"], _REF)
+    links = [
+        {"text": "January 4th Bulletin",
+         "url": "https://holyspiritsd.com/wp-content/uploads/2026/01/January-4th-Bulletin.pdf"},
+        {"text": "May 17th Bulletin",
+         "url": "https://holyspiritsd.com/wp-content/uploads/2026/05/May-17th-Bulletin.pdf"},
+    ]
+    ranked = _RANKER(ctx, links)
+    assert ranked[0][0].endswith("May-17th-Bulletin.pdf"), (
+        f"Most recent PDF should rank first, got: {ranked}"
+    )
+
+
+def test_temporal_compact_date_newest_first():
+    """parishesonline.com scenario: compact YYYYMMDD URLs are recency-ranked so
+    June 14 beats March 1 despite identical BM25 scores."""
+    ctx = _ctx_dated(["bulletin"], _REF)
+    links = [
+        {"text": "Bulletin",
+         "url": "https://container.parishesonline.com/bulletins/05/4241/20260301B.pdf"},
+        {"text": "Bulletin",
+         "url": "https://container.parishesonline.com/bulletins/05/4241/20260614B.pdf"},
+    ]
+    ranked = _RANKER(ctx, links)
+    assert ranked[0][0].endswith("20260614B.pdf"), (
+        f"June 14 should rank first, got: {ranked}"
+    )
+
+
+def test_temporal_no_reference_date_preserves_dom_order():
+    """When reference_date is None, temporal bonus is not applied and original
+    DOM order is preserved for equal-scoring links."""
+    ctx = _ctx_dated(["bulletin"], None)  # no reference date
+    ctx_no_ref = GoalContext(
+        goal="test goal",
+        navigation_hint=None,
+        goal_type="document_link",
+        goal_type_confidence=1.0,
+        synonyms={},
+        anchor_terms=["bulletin"],
+        negative_terms=[],
+        regex_hints=[],
+        description="test",
+        source="deterministic",
+        model_used=None,
+        created_at=datetime.now(timezone.utc),
+        locale="en_US",
+        validation_warnings=[],
+        reference_date=None,
+    )
+    links = [
+        {"text": "January 4th Bulletin",
+         "url": "https://example.com/January-4th-Bulletin.pdf"},
+        {"text": "May 17th Bulletin",
+         "url": "https://example.com/May-17th-Bulletin.pdf"},
+    ]
+    ranked = _RANKER(ctx_no_ref, links)
+    # Both score equally on BM25; DOM order preserved (January first).
+    assert ranked[0][0].endswith("January-4th-Bulletin.pdf"), (
+        f"DOM order should be preserved without reference_date, got: {ranked}"
     )

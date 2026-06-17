@@ -126,6 +126,7 @@ def check_plausibility(
     decision: NavDecision,
     page_text: str,
     visited_urls: set[str],
+    goal_type: str | None = None,
 ) -> PlausibilityResult:
     """Check a validated model decision for signs of prompt injection or drift.
 
@@ -138,6 +139,15 @@ def check_plausibility(
         page_text:       Visible text extracted from the page (pre-truncation).
                          Used for the thin-content confidence-spike check.
         visited_urls:    Accepted but unused — retained for call-site compatibility.
+        goal_type:       The preprocessed goal type (e.g. "document_link"), or
+                         None. The confidence-spike check is suppressed for a
+                         found=True decision on a "document_link" goal: the target
+                         is a file linked from a page that is legitimately
+                         text-thin but link-dense (a JS bulletin widget, a date
+                         grid), so a confident find there is the expected success
+                         case, not an injection signal. Provenance and the
+                         destination verifier remain the substantive guards for
+                         the claimed document URL.
 
     Returns:
         PlausibilityResult with passed=True and empty flags if all checks pass;
@@ -153,9 +163,11 @@ def check_plausibility(
         if flag:
             flags.append(flag)
 
-        flag = _check_confidence_spike(decision, page_text)
-        if flag:
-            flags.append(flag)
+        suppress_spike = goal_type == "document_link" and decision.found
+        if not suppress_spike:
+            flag = _check_confidence_spike(decision, page_text)
+            if flag:
+                flags.append(flag)
 
         flag = _check_zero_links_no_path(decision)
         if flag:

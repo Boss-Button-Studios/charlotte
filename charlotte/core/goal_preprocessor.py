@@ -5,7 +5,9 @@ GoalPreprocessorProtocol defines the callable interface. DeterministicPreprocess
 is the Phase A default: tokenizes the goal into anchor_terms with no model calls.
 HybridPreprocessor (Phase B) calls a local model to expand synonyms and improve
 goal-type classification, falling back to DeterministicPreprocessor on any failure.
-InMemoryGoalContextCache caches GoalContext objects within a single crawl.
+
+Cache and AutoPreprocessor live in goal_context_cache to keep this file under
+the 600-line cap.
 """
 
 from __future__ import annotations
@@ -13,12 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Protocol, runtime_checkable
 
 import httpx
 
-import charlotte.models as _models
 from charlotte.core.text_normalization import normalize_text, tokenize
 from charlotte.models import GoalContext, GoalType
 
@@ -124,6 +125,26 @@ def _detect_goal_type(goal_normalized: str) -> GoalType:
 
 
 # ---------------------------------------------------------------------------
+# Temporal reference date detection
+# ---------------------------------------------------------------------------
+
+# Terms that signal the goal is time-relative; when matched, the preprocessor
+# stamps GoalContext.reference_date with today's date so the model knows what
+# "latest" or "current" means during page evaluation.
+_TEMPORAL_RE = re.compile(
+    r"\b(?:latest|newest|most\s+recent|recent|current|today"
+    r"|this\s+week|this\s+month|this\s+year|upcoming)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_reference_date(goal: str, navigation_hint: str | None) -> date | None:
+    """Return today's date if the goal or hint contains temporal terms, else None."""
+    combined = goal + " " + (navigation_hint or "")
+    return date.today() if _TEMPORAL_RE.search(combined) else None
+
+
+# ---------------------------------------------------------------------------
 # DeterministicPreprocessor
 # ---------------------------------------------------------------------------
 
@@ -167,6 +188,7 @@ class DeterministicPreprocessor:
             created_at=datetime.now(timezone.utc),
             locale=locale,
             validation_warnings=[],
+            reference_date=_detect_reference_date(goal, navigation_hint),
         )
 
 
@@ -440,6 +462,7 @@ def _validate_hybrid_output(
         created_at=datetime.now(timezone.utc),
         locale=locale,
         validation_warnings=warnings,
+        reference_date=_detect_reference_date(goal, navigation_hint),
     )
 
 
@@ -511,78 +534,3 @@ class HybridPreprocessor:
         return _validate_hybrid_output(_extract_json(content), goal, navigation_hint, locale,
                                        self._model)
 
-
-# ---------------------------------------------------------------------------
-# Cache protocol and in-memory implementation
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class GoalContextCacheProtocol(Protocol):
-    def get_or_create(
-        self,
-        goal: str,
-        navigation_hint: str | None,
-        locale: str,
-        preprocessor: GoalPreprocessorProtocol,
-    ) -> GoalContext: ...
-
-
-class InMemoryGoalContextCache:
-    """Dict-backed GoalContext cache scoped to a single crawl.
-
-    Cache key includes locale and CACHE_FORMAT_VERSION so that locale changes
-    and library upgrades always produce fresh contexts (spec §4.6).
-    """
-
-    def __init__(self) -> None:
-        self._store: dict[tuple, GoalContext] = {}
-
-    def get_or_create(
-        self,
-        goal: str,
-        navigation_hint: str | None,
-        locale: str,
-        preprocessor: GoalPreprocessorProtocol,
-    ) -> GoalContext:
-        key = (
-            normalize_text(goal),
-            normalize_text(navigation_hint or ""),
-            type(preprocessor).__name__,
-            preprocessor.model_id,
-            locale,
-            _models.CACHE_FORMAT_VERSION,  # read at call time so bumps bust cached entries
-        )
-        if key not in self._store:
-            self._store[key] = preprocessor(goal, navigation_hint, locale)
-        return self._store[key]
-
-
-# ---------------------------------------------------------------------------
-# AutoPreprocessor — selects strategy automatically from goal type (spec §4.4)
-# ---------------------------------------------------------------------------
-
-class AutoPreprocessor:
-    """Zero-config preprocessor: fast for navigation, smart for fact goals.
-
-    Runs DeterministicPreprocessor first for a free goal-type signal.
-    Navigation goals return immediately with no model call. Fact-type goals
-    (freeform_fact, phone_extraction, etc.) escalate to HybridPreprocessor
-    for synonym expansion and better classification. Falls back silently to
-    the deterministic result if the model call fails.
-    """
-
-    model_id: str | None
-
-    def __init__(
-        self, *, base_url: str = _HYBRID_BASE_URL, model: str = _HYBRID_MODEL,
-        timeout: float | None = None,
-    ) -> None:
-        self._deterministic = DeterministicPreprocessor()
-        self._hybrid = HybridPreprocessor(base_url=base_url, model=model, timeout=timeout)
-        self.model_id = model
-
-    def __call__(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
-        ctx = self._deterministic(goal, navigation_hint, locale)
-        if ctx.goal_type == "navigation":
-            return ctx
-        return self._hybrid(goal, navigation_hint, locale)

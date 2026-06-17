@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import sys
+from datetime import date
 from urllib.parse import urlsplit
 
 import httpx
@@ -103,6 +104,7 @@ Rules:
 - When found=true, result_url must be set — either to the current page URL (when this page is the answer) or to a URL copied exactly from the <available_links> list. result_url may never be null when found=true.
 - If the page contains a specific value that directly answers the goal question (a function name, a count, a year, an author, a title), set found=true with that value in "answer". Do not keep searching when you can already answer the question.
 - Contradiction rule: if your "reasoning" says the answer is "explicitly described", "explicitly demonstrated", "explicitly stated", or otherwise directly present on this page, then found MUST be true. Stating that the answer is explicitly on the page while returning found=false is always self-contradictory and wrong.
+- Navigation consistency rule: if your "reasoning" names a specific link or page as a promising next step toward the goal, that URL MUST appear in links_to_follow. Naming a useful next step in reasoning while leaving it out of links_to_follow is an error — act on what you identified.
 - Respond with JSON only. No prose outside the JSON object.\
 """
 
@@ -111,6 +113,7 @@ def _build_user_prompt(
     *,
     goal: str,
     navigation_hint: str | None,
+    reference_date: date | None = None,
     page_title: str,
     page_url: str,
     page_summary: str,
@@ -126,6 +129,8 @@ def _build_user_prompt(
         parts.append("")
 
     parts.append(f"Goal: {goal}")
+    if reference_date:
+        parts.append(f"Today's date: {reference_date.strftime('%B %d, %Y')}")
     if navigation_hint:
         parts.append(f"Navigation hint: {navigation_hint}")
 
@@ -374,10 +379,12 @@ class LocalAdapter:
         visit_history: list[str],
         results_so_far: int,
         schema_hint: str | None = None,
+        reference_date: date | None = None,
     ) -> dict[str, object]:
         user_prompt = _build_user_prompt(
             goal=goal,
             navigation_hint=navigation_hint,
+            reference_date=reference_date,
             page_title=page_title,
             page_url=page_url,
             page_summary=page_summary,

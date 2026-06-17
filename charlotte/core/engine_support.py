@@ -10,9 +10,17 @@ import logging
 import re
 from time import monotonic
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
+from charlotte.core.fetcher import _is_document_url
+from charlotte.core.link_ranker import _extract_date
+from charlotte.core.normalizer import normalize_url
 from charlotte.core.provenance import check_provenance
-from charlotte.exceptions import CharlotteError, CharlotteInternalError
+from charlotte.exceptions import (
+    CharlotteConfigError,
+    CharlotteError,
+    CharlotteInternalError,
+)
 from charlotte.models import (
     CrawlResult,
     LinksRanked,
@@ -22,6 +30,8 @@ from charlotte.models import (
 )
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from charlotte.models import (
         FailureMode,
         GoalContext,
@@ -223,3 +233,206 @@ def _check_result(output, page, extracted) -> tuple[bool, "str | None", list]:
             effective_result_url = None
 
     return effective_found, effective_result_url, prov.links_to_follow
+
+
+def _domain_allowed(host: str, domains: frozenset[str]) -> bool:
+    """True if host is in domains or is a subdomain of any domain in domains."""
+    if host in domains:
+        return True
+    return any(host.endswith("." + d) for d in domains)
+
+
+def _queue_has_unvisited(
+    queue: "list[tuple[float, int, str, int]]",
+    visited: "set[str]",
+) -> bool:
+    """True if the crawl queue holds at least one not-yet-visited URL.
+
+    The crawl loop silently drops queue entries whose URL is already visited
+    (a stale duplicate enqueued by an earlier page).  A literal ``queue`` emptiness
+    check therefore overstates how much work remains: a queue containing only
+    stale, already-visited entries is effectively empty — those entries become
+    no-op pops.  The stranding fallback uses this to fire when the *live* queue is
+    empty, not merely when the raw queue is, so a dead-ending page isn't masked by
+    leftover duplicates (the St. Anne field-test failure).
+    """
+    for item in queue:
+        try:
+            if normalize_url(item[2]) not in visited:
+                return True
+        except CharlotteConfigError:
+            continue
+    return False
+
+
+def _select_fallback_links(
+    ranked: "list[tuple[str, float]]",
+    *,
+    depth: int,
+    max_depth: int,
+    visited: "set[str]",
+    allowed_domains: frozenset[str],
+    reference_date: "date | None" = None,
+    limit: int = 3,
+) -> "list[tuple[str, float]]":
+    """Pick top-ranked eligible links to enqueue when the model strands the crawl.
+
+    A small model sometimes returns found=False with no followable links on a
+    non-terminal page (e.g. a parish homepage whose bulletin lives one hop away).
+    With nothing left in the queue that dead-ends the crawl even though the
+    ranker surfaced perfectly good navigation links.  This is the safety net:
+    when the model contributes nothing and the queue would otherwise empty, we
+    trust the BM25 ranker over the model's empty list and keep navigating.
+
+    Returns up to ``limit`` ``(url, score)`` pairs from ``ranked`` (best-first)
+    that are not yet visited, are domain-allowed, and respect ``max_depth``.
+    URLs whose normalized form repeats are emitted once.  Returns an empty list
+    when the next hop would exceed ``max_depth`` or nothing is eligible.
+
+    When ``reference_date`` is set (a temporal "latest" goal), clearly-stale dated
+    documents are skipped: enqueuing one would let the binary short-circuit accept
+    an old bulletin as the result, the very thing the staleness guard prevents on
+    the model-claim path.
+    """
+    if depth + 1 > max_depth:
+        return []
+    selected: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for url, score in ranked:
+        try:
+            norm = normalize_url(url)
+        except CharlotteConfigError:
+            continue
+        if norm in visited or norm in seen:
+            continue
+        host = (urlsplit(norm).hostname or "").lower()
+        if not _domain_allowed(host, allowed_domains):
+            continue
+        if reference_date is not None and _is_stale_dated_document(url, reference_date):
+            continue
+        seen.add(norm)
+        selected.append((url, score))
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+# Older than this (in days) is treated as "clearly not the latest" for a temporal
+# "latest …" goal — about four weeks, comfortably past a normal weekly cadence so a
+# legitimately recent bulletin is never downgraded.
+_STALENESS_DAYS: int = 28
+
+
+def _document_claim_age_days(url: str, reference_date: "date") -> "int | None":
+    """Age in days of a dated document URL relative to reference_date.
+
+    Returns None when the URL is not a document or carries no parseable date, so
+    callers can distinguish "fresh enough / undated" from "old". Reuses the link
+    ranker's date extraction so URL date formats stay recognised in one place.
+    """
+    if not _is_document_url(url):
+        return None
+    parsed = _extract_date("", url, reference_date)
+    if parsed is None:
+        return None
+    return (reference_date - parsed).days
+
+
+def _is_stale_dated_document(url: str, reference_date: "date") -> bool:
+    """True if url is a dated document older than _STALENESS_DAYS."""
+    age = _document_claim_age_days(url, reference_date)
+    return age is not None and age > _STALENESS_DAYS
+
+
+def _fresher_exploration_links(
+    ranked: "list[tuple[str, float]]",
+    *,
+    stale_url: str,
+    reference_date: "date",
+    visited: "set[str]",
+    allowed_domains: frozenset[str],
+    limit: int = 3,
+) -> "list[str]":
+    """Goal-relevant links worth exploring instead of claiming a stale bulletin.
+
+    Returns up to ``limit`` unvisited, domain-allowed links from ``ranked`` that
+    carry positive goal relevance (BM25 score > 0) and are not themselves the
+    stale claim or another clearly-stale dated document — i.e. pages that could
+    lead to a newer result (an archive/"view all bulletins" link, an aggregator).
+    Empty list when none qualify, which the caller treats as "no fresher path, let
+    the stale claim stand".
+    """
+    try:
+        stale_norm = normalize_url(stale_url)
+    except CharlotteConfigError:
+        stale_norm = None
+    out: list[str] = []
+    seen: set[str] = set()
+    for url, score in ranked:
+        if score <= 0:
+            continue
+        try:
+            norm = normalize_url(url)
+        except CharlotteConfigError:
+            continue
+        if norm in visited or norm in seen or norm == stale_norm:
+            continue
+        host = (urlsplit(norm).hostname or "").lower()
+        if not _domain_allowed(host, allowed_domains):
+            continue
+        if _is_stale_dated_document(url, reference_date):
+            continue
+        seen.add(norm)
+        out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _build_binary_result(
+    url: str,
+    body: bytes,
+    goal_context: "GoalContext",
+) -> "tuple[VerificationResult, ResultContent | None]":
+    """Build a verification result for binary content already fetched by the engine.
+
+    Called when render_js=True and a document URL was fetched via Playwright's
+    APIRequestContext — avoids a second httpx round-trip in the verifier, which
+    would fail on servers whose bot-detection blocks plain httpx but allows
+    real browser requests.
+    """
+    from datetime import datetime, timezone
+    from urllib.parse import urlsplit
+
+    from charlotte.models import ResultContent, VerificationResult
+
+    if not body:
+        return (
+            VerificationResult(
+                url=url, passed=False, mode="existence", score=None,
+                reason="empty_response",
+            ),
+            None,
+        )
+
+    result = VerificationResult(
+        url=url, passed=True, mode="existence", score=None, reason="ok_existence_binary"
+    )
+
+    if goal_context.goal_type != "document_link":
+        return result, None
+
+    path = urlsplit(url).path
+    last_seg = path.rsplit("/", 1)[-1] if path else ""
+    suggested_filename = last_seg if ("." in last_seg) else None
+
+    content = ResultContent(
+        content=body,
+        content_type=None,
+        content_length=len(body),
+        suggested_filename=suggested_filename,
+        etag=None,
+        fetched_at=datetime.now(timezone.utc),
+        file_path=None,
+    )
+    return result, content

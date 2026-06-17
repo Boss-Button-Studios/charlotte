@@ -12,11 +12,18 @@ expansions) using BM25Okapi, then returns them sorted best-first for:
 Normalization is applied symmetrically (§4.5.1): anchor_terms stored in
 GoalContext are already normalized; link anchor text is normalized here before
 scoring so both sides use the same canonical form (T-69).
+
+When GoalContext.reference_date is set (triggered by "latest", "recent", etc.),
+a recency bonus is added to each link's BM25 score based on the age of any
+date detected in the link's anchor text or URL path.  This implements the
+"latest = top of stack" discipline: the most recently dated link always
+surfaces before older links with equivalent BM25 scores.
 """
 
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -31,6 +38,139 @@ _URL_EXT_SKIP = frozenset({
     "", "html", "htm", "xhtml", "php", "asp", "aspx", "jsp",
     "xml", "json", "pdf", "rss", "atom",
 })
+
+# ---------------------------------------------------------------------------
+# Temporal scoring — "latest = top of stack" discipline
+# ---------------------------------------------------------------------------
+
+_MONTH_NAMES: dict[str, int] = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+}
+
+# YYYY-MM-DD or YYYY/MM/DD
+_ISO_DATE_RE = re.compile(
+    r"\b(20\d\d)[/\-](0?[1-9]|1[0-2])[/\-](0?[1-9]|[12]\d|3[01])\b"
+)
+# MM-DD-YYYY or MM/DD/YYYY
+_MDY_DATE_RE = re.compile(
+    r"\b(0?[1-9]|1[0-2])[/\-](0?[1-9]|[12]\d|3[01])(?!\d)[/\-](20\d\d)\b"
+)
+# "June 14" / "June-14th" / "January 4th, 2026" — named month + day, optional year.
+# (?!\d) after the day prevents "2026" from matching as day=20 + noise.
+_NAMED_DATE_RE = re.compile(
+    r"\b(january|jan|february|feb|march|mar|april|apr|may|june|jun"
+    r"|july|jul|august|aug|september|sept?|october|oct|november|nov|december|dec)"
+    r"[\s\-_]+(0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?(?!\d)"
+    r"(?:[\s,\-_]+(20\d\d))?\b",
+    re.IGNORECASE,
+)
+
+# A bare 4-digit year (20xx) standing alone as a URL path segment, e.g. the
+# "2025" in /wp-content/uploads/2025/06/June-15th-Bulletin.pdf.  Used to
+# anchor named-month dates that carry no inline year.
+_PATH_YEAR_RE = re.compile(r"(?<![0-9])(20\d\d)(?![0-9])")
+
+# Compact YYYYMMDD in a URL filename, e.g. 20260614B.pdf (parishesonline.com style).
+# Searched only in the URL path — not anchor text — to avoid colliding with
+# invoice numbers, phone numbers, or other 8-digit sequences in page copy.
+_YYYYMMDD_RE = re.compile(
+    r"(?<![0-9])(20\d\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?![0-9])"
+)
+
+# Recency bonus caps at this value for a zero-day-old link — chosen to exceed
+# the ~1.43 BM25 score that "Parish History" (anchor + URL both match "parish")
+# produces when "parish" is an anchor term, so a dated bulletin always wins.
+_TEMPORAL_BONUS_MAX: float = 2.0
+# Bonus halves every 30 days; at 161 days (January in June) it drops to ~0.05.
+_TEMPORAL_HALF_LIFE: float = 30.0
+
+
+def _infer_year(month: int, day: int, reference: date) -> int:
+    """Return the year placing (month, day) most recently without exceeding 14 days future."""
+    for year in (reference.year, reference.year - 1):
+        try:
+            candidate = date(year, month, day)
+            if candidate <= reference + timedelta(days=14):
+                return year
+        except ValueError:
+            pass
+    return reference.year
+
+
+def _extract_date(anchor: str, url: str, reference: date) -> date | None:
+    """Extract the publication date most likely to represent this link.
+
+    Searches anchor text and URL path for ISO (YYYY-MM-DD), MDY (MM-DD-YYYY),
+    and named-month patterns.  Returns the plausible date closest to
+    reference_date, excluding dates more than 14 days in the future.
+
+    When a named-month pattern has no inline year (e.g. "June-15th-Bulletin.pdf"),
+    the year is taken from a lone 20xx segment in the URL path if exactly one is
+    present (e.g. /2025/06/ → 2025), falling back to _infer_year otherwise.
+    """
+    path = urlsplit(url).path
+    combined = anchor + " " + path
+    cutoff = reference + timedelta(days=14)
+    candidates: list[date] = []
+
+    # Collect any explicit 20xx years present as URL path segments.
+    path_years = {int(m.group(1)) for m in _PATH_YEAR_RE.finditer(path)}
+
+    for m in _YYYYMMDD_RE.finditer(path):
+        try:
+            candidates.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        except ValueError:
+            pass
+
+    for m in _ISO_DATE_RE.finditer(combined):
+        try:
+            candidates.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        except ValueError:
+            pass
+
+    for m in _MDY_DATE_RE.finditer(combined):
+        try:
+            candidates.append(date(int(m.group(3)), int(m.group(1)), int(m.group(2))))
+        except ValueError:
+            pass
+
+    for m in _NAMED_DATE_RE.finditer(combined):
+        month = _MONTH_NAMES.get(m.group(1).lower())
+        if month is None:
+            continue
+        try:
+            day = int(m.group(2))
+            year_str = m.group(3)
+            if year_str:
+                year = int(year_str)
+            elif len(path_years) == 1:
+                year = next(iter(path_years))
+            else:
+                year = _infer_year(month, day, reference)
+            candidates.append(date(year, month, day))
+        except ValueError:
+            pass
+
+    plausible = [d for d in candidates if d <= cutoff]
+    if not plausible:
+        return None
+    return min(plausible, key=lambda d: abs((reference - d).days))
+
+
+def _temporal_bonus(link_date: date | None, reference: date) -> float:
+    """Recency bonus for a link whose publication date is link_date.
+
+    Peaks at _TEMPORAL_BONUS_MAX for a zero-day-old (or slightly future) date
+    and halves every _TEMPORAL_HALF_LIFE days.  Returns 0.0 when no date
+    was detected.
+    """
+    if link_date is None:
+        return 0.0
+    days_old = max(0, (reference - link_date).days)
+    return _TEMPORAL_BONUS_MAX * (0.5 ** (days_old / _TEMPORAL_HALF_LIFE))
 
 
 def _anchor_tokens(text: str) -> list[str]:
@@ -175,6 +315,18 @@ class BM25LinkRanker:
             )
             for lnk in links
         ]
+
+        # When the goal contains temporal terms ("latest", "recent", etc.),
+        # add a recency bonus so the most recently dated link surfaces first.
+        ref = goal_context.reference_date
+        if ref is not None:
+            scores = [
+                s + _temporal_bonus(
+                    _extract_date(lnk.get("text") or "", lnk.get("url") or "", ref),
+                    ref,
+                )
+                for s, lnk in zip(scores, links)
+            ]
 
         # If every score is zero, preserve original DOM order (stable tiebreak).
         if not any(s > 0 for s in scores):
