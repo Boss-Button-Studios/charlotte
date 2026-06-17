@@ -8,6 +8,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
+from charlotte.core import model_metrics
 from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.engine_support import (
     _build_binary_result,
@@ -593,6 +594,10 @@ async def _crawl_core(
         )
         result_holder.append(result)
 
+        logger.info(
+            "model calls: %s (total=%d) over %d page(s)",
+            model_metrics.snapshot(), model_metrics.total(), pages_visited,
+        )
         yield CrawlComplete(
             found=found,
             result_count=len(result_urls),

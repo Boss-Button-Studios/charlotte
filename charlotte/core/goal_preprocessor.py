@@ -20,6 +20,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
+from charlotte.core import model_metrics
 from charlotte.core.text_normalization import normalize_text, tokenize
 from charlotte.models import GoalContext, GoalType
 
@@ -511,6 +512,7 @@ class HybridPreprocessor:
             return self._fallback(goal, navigation_hint, locale)
 
     def _call_model(self, goal: str, navigation_hint: str | None, locale: str) -> GoalContext:
+        model_metrics.record(model_metrics.PREPROCESSOR)
         hint_line = f"\nNavigation hint: {navigation_hint}" if navigation_hint else ""
         payload = {
             "model": self._model,

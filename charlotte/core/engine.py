@@ -21,6 +21,7 @@ from charlotte.core.engine_support import (
 )
 from charlotte.core.engine_loop import _crawl_core
 from charlotte.core.fetcher import _import_playwright
+from charlotte.core import model_metrics
 from charlotte.core.goal_context_cache import AutoPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
@@ -134,6 +135,9 @@ def crawl(
         user_agent=resolved_user_agent,
     )
 
+    # Start a fresh model-call tally for this crawl before the preprocessor runs,
+    # so its (possible) model call is counted alongside the loop's evaluations.
+    model_metrics.reset()
     ctx_t0 = monotonic()
     goal_context = _preprocessor(goal, navigation_hint, locale)
     ctx_ms = _elapsed_ms(ctx_t0)

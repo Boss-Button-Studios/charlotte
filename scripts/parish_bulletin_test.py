@@ -36,6 +36,7 @@ from time import monotonic
 import charlotte
 from charlotte import crawl
 from charlotte.adapters.local import LocalAdapter
+from charlotte.core import model_metrics
 
 # Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
 # The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
@@ -165,6 +166,8 @@ class ParishResult:
     pages_visited: int = 0
     elapsed_ms: int = 0
     error: str | None = None
+    model_calls: dict = field(default_factory=dict)
+    model_calls_total: int = 0
     events: list[dict] = field(default_factory=list)
 
 
@@ -296,9 +299,15 @@ async def run_parish(
                 result.found = event.found
                 result.pages_visited = event.pages_visited
                 result.elapsed_ms = event.elapsed_ms
+                # Capture the real model-call tally for this crawl (CrawlComplete is
+                # the last event, so all model calls have been recorded by now).
+                result.model_calls = model_metrics.snapshot()
+                result.model_calls_total = model_metrics.total()
                 result.events.append({"type": "CrawlComplete", "elapsed_ms": elapsed_ms,
                                       "found": event.found,
                                       "pages_visited": event.pages_visited,
+                                      "model_calls": result.model_calls,
+                                      "model_calls_total": result.model_calls_total,
                                       "failure_mode": (
                                           event.failure_mode.value if event.failure_mode else None
                                       )})
@@ -319,6 +328,10 @@ async def run_parish(
 
     status = "FOUND" if result.found else "NOT FOUND"
     print(f"  → {status}  {result.pages_visited} pages  {result.elapsed_ms // 1000}s", flush=True)
+    if result.model_calls_total:
+        breakdown = " ".join(f"{k}={v}" for k, v in sorted(result.model_calls.items()))
+        per_page = result.model_calls_total / result.pages_visited if result.pages_visited else 0
+        print(f"  → model calls: {result.model_calls_total}  ({breakdown})  ~{per_page:.1f}/page", flush=True)
     if result.file_path:
         print(f"  → {result.file_path}", flush=True)
 
@@ -354,6 +367,7 @@ async def main() -> None:
         "goal": GOAL,
         "found": sum(1 for r in results if r.found),
         "total": len(results),
+        "model_calls_total": sum(r.model_calls_total for r in results),
         "parishes": [
             {
                 "name":               r.name,
@@ -366,6 +380,8 @@ async def main() -> None:
                 "file_path":          str(r.file_path) if r.file_path else None,
                 "pages_visited":      r.pages_visited,
                 "elapsed_ms":         r.elapsed_ms,
+                "model_calls":        r.model_calls,
+                "model_calls_total":  r.model_calls_total,
                 "error":              r.error,
             }
             for r in results
@@ -378,15 +394,20 @@ async def main() -> None:
 
     # Final table
     found_n = summary["found"]
+    mc_total = summary["model_calls_total"]
+    pages_total = sum(r.pages_visited for r in results)
     print(f"\n{'═' * 64}")
     print(f"  {found_n}/{len(results)} bulletins retrieved   run: {run_dir}")
+    print(f"  {mc_total} model calls across {pages_total} pages "
+          f"(~{mc_total / pages_total:.1f}/page)" if pages_total else "")
     print(f"{'═' * 64}")
     for r in results:
         icon = "✓" if r.found else "✗"
         detail = (r.suggested_filename or r.result_url or "not found")
         if r.error:
             detail = f"ERROR: {r.error[:50]}"
-        print(f"  {icon}  {r.name:<28}  {detail}")
+        mc = f"  ·  {r.model_calls_total} calls" if r.model_calls_total else ""
+        print(f"  {icon}  {r.name:<28}  {detail}{mc}")
     print()
 
 
