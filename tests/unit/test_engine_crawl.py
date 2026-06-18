@@ -2225,3 +2225,36 @@ async def test_off_domain_document_filtered_when_flag_off():
 
     assert _PDF not in fetched, "off-domain document must be filtered when flag is off"
     assert not [e for e in events if isinstance(e, ResultFound)]
+
+
+def test_build_binary_result_writes_result_to_file(tmp_path):
+    """Regression: render_js binary docs (raw_bytes path) bypass the verifier, so
+    _build_binary_result must itself honour result_to_file — otherwise document_link
+    + result_to_file + render_js silently drops the file (school-calendar T1)."""
+    ctx = _goal_ctx("Find the latest calendar PDF")
+    vresult, content = _build_binary_result(
+        "http://cdn.example.net/Calendar2026.pdf",
+        b"%PDF-1.4 calendar-bytes",
+        ctx,
+        result_to_file=tmp_path,
+    )
+    assert vresult.passed is True
+    assert content is not None
+    # Written to disk, not held in memory.
+    assert content.file_path == tmp_path / "Calendar2026.pdf"
+    assert content.file_path.read_bytes() == b"%PDF-1.4 calendar-bytes"
+    assert content.content is None
+
+
+def test_build_binary_result_result_to_file_sanitizes_traversal(tmp_path):
+    """A URL-derived filename with parent components must not escape the directory."""
+    ctx = _goal_ctx("Find the latest calendar PDF")
+    _, content = _build_binary_result(
+        "http://evil.example/a/..%2f..%2fetc/passwd.pdf",
+        b"%PDF-1.4 x",
+        ctx,
+        result_to_file=tmp_path,
+    )
+    # Whatever the last path segment, the write stays inside tmp_path.
+    assert content.file_path is not None
+    assert content.file_path.parent == tmp_path

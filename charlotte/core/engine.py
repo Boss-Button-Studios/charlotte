@@ -174,6 +174,7 @@ def crawl(
         max_response_bytes=max_response_bytes,
         user_agent=resolved_user_agent,
         follow_linked_resources=follow_linked_resources,
+        result_to_file=result_to_file,
         preprocessor=_preprocessor,
         ranker=_ranker,
         candidate_extractor=_extractor,

@@ -61,6 +61,8 @@ from charlotte.models import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from charlotte.core.candidate_extractor import CandidateExtractorProtocol
     from charlotte.core.destination_verifier import DestinationVerifierProtocol
     from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
@@ -96,6 +98,7 @@ async def _crawl_core(
     max_response_bytes: int,
     user_agent: str,
     follow_linked_resources: bool,
+    result_to_file: "Path | None",
     preprocessor: "GoalPreprocessorProtocol",
     ranker: "LinkRankerProtocol",
     candidate_extractor: "CandidateExtractorProtocol",
@@ -237,7 +240,9 @@ async def _crawl_core(
                     # Bytes already captured by Playwright APIRequestContext (render_js=True).
                     # Skip verifier re-fetch — the same server-side bot detection that
                     # blocks plain httpx would also block the verifier's httpx request.
-                    vresult, vcontent = _build_binary_result(page.url, page.raw_bytes, goal_context)
+                    vresult, vcontent = _build_binary_result(
+                        page.url, page.raw_bytes, goal_context, result_to_file=result_to_file,
+                    )
                 else:
                     vresult, vcontent = await _verify_candidate(verifier, page.url, goal_context)
                 if not vresult.passed:
