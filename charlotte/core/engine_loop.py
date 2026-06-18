@@ -63,8 +63,8 @@ from charlotte.models import (
 if TYPE_CHECKING:
     from charlotte.core.candidate_extractor import CandidateExtractorProtocol
     from charlotte.core.destination_verifier import DestinationVerifierProtocol
+    from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
     from charlotte.core.link_ranker import LinkRankerProtocol
-    from charlotte.models import GoalContext
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +95,23 @@ async def _crawl_core(
     chromium_executable: "str | None",
     max_response_bytes: int,
     user_agent: str,
-    goal_context: "GoalContext",
-    goal_context_ms: int,
+    preprocessor: "GoalPreprocessorProtocol",
     ranker: "LinkRankerProtocol",
     candidate_extractor: "CandidateExtractorProtocol",
     verifier: "DestinationVerifierProtocol",
     locale: str,
 ) -> "AsyncGenerator[StreamEvent, None]":
     start_time = monotonic()
+
+    # Reset the model-call tally here, in the generator body, not in crawl(): a
+    # streamed crawl runs this body when the generator is *consumed*, not when
+    # crawl() is called. Resetting (and preprocessing, whose model call we want
+    # counted) at consumption keeps each crawl's tally correctly scoped even when
+    # several stream=True generators are created before any is iterated.
+    model_metrics.reset()
+    _ctx_t0 = monotonic()
+    goal_context = preprocessor(goal, navigation_hint, locale)
+    goal_context_ms = _elapsed_ms(_ctx_t0)
 
     yield CrawlStarted(
         start_url=start_url,

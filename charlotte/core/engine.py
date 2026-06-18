@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-from time import monotonic
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from urllib.parse import urlsplit
 
@@ -16,12 +15,10 @@ from charlotte.config import CharlotteConfig
 from charlotte.core.candidate_extractor import DefaultCandidateExtractor
 from charlotte.core.destination_verifier import DefaultDestinationVerifier
 from charlotte.core.engine_support import (
-    _elapsed_ms,
     _resolve_default_adapter,
 )
 from charlotte.core.engine_loop import _crawl_core
 from charlotte.core.fetcher import _import_playwright
-from charlotte.core import model_metrics
 from charlotte.core.goal_context_cache import AutoPreprocessor
 from charlotte.core.link_ranker import BM25LinkRanker
 from charlotte.core.normalizer import normalize_url, validate_url_safety
@@ -135,13 +132,6 @@ def crawl(
         user_agent=resolved_user_agent,
     )
 
-    # Start a fresh model-call tally for this crawl before the preprocessor runs,
-    # so its (possible) model call is counted alongside the loop's evaluations.
-    model_metrics.reset()
-    ctx_t0 = monotonic()
-    goal_context = _preprocessor(goal, navigation_hint, locale)
-    ctx_ms = _elapsed_ms(ctx_t0)
-
     start_hostname = (urlsplit(normalized_start).hostname or "").lower()
     if allowed_domains is None:
         # Strip a leading "www." to get the registrant-level base domain, then
@@ -177,8 +167,7 @@ def crawl(
         chromium_executable=chromium_executable,
         max_response_bytes=max_response_bytes,
         user_agent=resolved_user_agent,
-        goal_context=goal_context,
-        goal_context_ms=ctx_ms,
+        preprocessor=_preprocessor,
         ranker=_ranker,
         candidate_extractor=_extractor,
         verifier=_verifier,

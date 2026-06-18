@@ -134,3 +134,38 @@ async def test_tally_resets_between_crawls():
     # One clean eval each — the second crawl did not inherit the first's count.
     assert first_total == 1, f"expected 1 base call, got {first_total}"
     assert second_total == 1, f"tally leaked across crawls: {second_total}"
+
+
+@pytest.mark.asyncio
+async def test_tally_scoped_per_generator_when_created_before_iterating():
+    """Regression (CodeRabbit, PR #45): creating several stream=True generators
+    before iterating any of them must not bleed tallies. reset() + preprocessing
+    run when the generator is *consumed*, not when crawl() is called, so each
+    crawl's count is its own."""
+    page = FetchResult(
+        url=_START, html=f"<html><body><p>{_WORDS}</p></body></html>",
+        status_code=200, fetch_ms=0,
+    )
+
+    async def _mock_fetch(self, url, *, visited_urls, **kwargs):
+        return page
+
+    async def _ok_adapter(*, page_url, **kwargs):
+        return {
+            "found": True, "confidence": 0.95, "result_url": page_url,
+            "links_to_follow": [], "reasoning": "found it",
+        }
+
+    with patch("charlotte.core.fetcher.PageFetcher.fetch", _mock_fetch):
+        # Both generators created up front — before either is consumed.
+        gen1 = crawl(_START, "Find the contact page", model=_ok_adapter,
+                     stream=True, respect_robots=False, default_delay=0.0)
+        gen2 = crawl(_START, "Find the contact page", model=_ok_adapter,
+                     stream=True, respect_robots=False, default_delay=0.0)
+        await _collect(gen1)
+        first = model_metrics.total()
+        await _collect(gen2)
+        second = model_metrics.total()
+
+    assert first == 1, f"first crawl's tally was polluted by the second's creation: {first}"
+    assert second == 1, f"second crawl did not reset its own tally: {second}"
