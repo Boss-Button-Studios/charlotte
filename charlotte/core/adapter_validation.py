@@ -17,6 +17,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from charlotte.core import model_metrics
 from charlotte.exceptions import AdapterOutputError
 
 if TYPE_CHECKING:
@@ -252,6 +253,7 @@ async def call_with_validation(
     )
 
     # First attempt — optional hint (None for normal calls; reinforced text for H3 retry)
+    model_metrics.record(model_metrics.BASE)
     try:
         raw = await adapter(schema_hint=schema_hint, **common)
     except AdapterOutputError:
@@ -264,6 +266,7 @@ async def call_with_validation(
         pass  # Fall through to retry with reinforced schema hint
 
     # Second attempt — reinforced schema hint (T-09 path succeeds here)
+    model_metrics.record(model_metrics.SCHEMA_RETRY)
     try:
         raw = await adapter(schema_hint=_SCHEMA_HINT, **common)
     except AdapterOutputError:

@@ -728,3 +728,41 @@ def test_reference_date_set_for_current():
 def test_reference_date_set_for_upcoming():
     ctx = _PREPROCESSOR("Find upcoming events", None, "en")
     assert ctx.reference_date == date.today()
+
+
+# ---------------------------------------------------------------------------
+# AutoPreprocessor — document_link takes the fast (no-model) path
+# ---------------------------------------------------------------------------
+
+def test_auto_document_link_skips_model():
+    """A document_link goal is served by deterministic anchors — no HybridPreprocessor
+    call. This removed the per-crawl preprocessor model call (~27% of model calls in
+    the parish runs)."""
+    from unittest.mock import MagicMock
+    pre = AutoPreprocessor()
+    pre._hybrid = MagicMock()
+    ctx = pre("Find and download the latest bulletin PDF", None, "en_US")
+    assert ctx.goal_type == "document_link"
+    pre._hybrid.assert_not_called()
+
+
+def test_auto_navigation_still_skips_model():
+    """Regression: navigation goals keep their existing fast path."""
+    from unittest.mock import MagicMock
+    pre = AutoPreprocessor()
+    pre._hybrid = MagicMock()
+    ctx = pre("Find the contact page", None, "en_US")
+    assert ctx.goal_type == "navigation"
+    pre._hybrid.assert_not_called()
+
+
+def test_auto_fact_goal_still_escalates_to_model():
+    """Fact-type goals (e.g. phone_extraction) still escalate to the model for
+    synonym expansion — only navigation/document_link take the fast path."""
+    from unittest.mock import MagicMock
+    pre = AutoPreprocessor()
+    sentinel = object()
+    pre._hybrid = MagicMock(return_value=sentinel)
+    result = pre("Find the phone number for the clinic", None, "en_US")
+    pre._hybrid.assert_called_once()
+    assert result is sentinel
