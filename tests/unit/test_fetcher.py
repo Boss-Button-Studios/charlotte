@@ -666,3 +666,33 @@ async def test_httpx_fetch_raises_challenge_error_on_interstitial():
     )
     with pytest.raises(CharlotteChallengeError, match="declines automated access"):
         await _fetcher().fetch(f"{_BASE}/bulletin", visited_urls=set())
+
+
+# ---------------------------------------------------------------------------
+# follow_linked_resources — terminal off-domain document retrieval
+# ---------------------------------------------------------------------------
+
+def test_is_allowed_relaxation_documents_only():
+    """With follow_linked_resources, off-domain *documents* are fetchable but
+    off-domain HTML is not — so navigation never leaves the start domain."""
+    strict = PageFetcher(allowed_domains={"school.org"})
+    relaxed = PageFetcher(allowed_domains={"school.org"}, follow_linked_resources=True)
+    # in-domain: always allowed
+    assert strict._is_allowed("https://school.org/x") is True
+    assert relaxed._is_allowed("https://school.org/x") is True
+    # off-domain document: allowed only when the flag is set
+    assert strict._is_allowed("https://cdn.finalsite.net/cal.pdf") is False
+    assert relaxed._is_allowed("https://cdn.finalsite.net/cal.pdf") is True
+    # off-domain HTML: refused either way (no off-domain navigation)
+    assert relaxed._is_allowed("https://evil.example/page.html") is False
+    assert relaxed._is_allowed("https://drive.google.com/file/d/ID/view") is False
+
+
+@respx.mock
+async def test_follow_linked_resources_does_not_bypass_ssrf():
+    """The relaxation must not open SSRF: an off-domain 'document' on a private IP
+    is still blocked by validate_url_safety, which runs regardless of domain policy."""
+    from charlotte.exceptions import CharlotteSSRFError
+    relaxed = PageFetcher(allowed_domains={"school.org"}, follow_linked_resources=True)
+    with pytest.raises(CharlotteSSRFError):
+        await relaxed.fetch("http://127.0.0.1/calendar.pdf", visited_urls=set())

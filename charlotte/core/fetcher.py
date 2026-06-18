@@ -163,8 +163,14 @@ class PageFetcher:
         chromium_executable: str | None = None,
         max_response_bytes: int = 10 * 1024 * 1024,
         user_agent: str = HTTP_USER_AGENT,
+        follow_linked_resources: bool = False,
     ) -> None:
         self._render_js = render_js
+        # When True, an off-domain URL is fetchable only if it is a document
+        # (PDF/DOCX/etc.) — a terminal resource the in-scope site linked to.
+        # Off-domain HTML is still refused, so this never enables off-domain
+        # navigation/crawling. SSRF validation (validate_url_safety) is unaffected.
+        self._follow_linked_resources = follow_linked_resources
         self._render_timeout = render_timeout
         # None → use Playwright's bundled Chromium; non-None → use this path instead.
         # Useful on OS versions Playwright doesn't yet support (e.g. Ubuntu 26.04).
@@ -191,7 +197,12 @@ class PageFetcher:
         host = self._hostname(url)
         if host in self._allowed_domains:
             return True
-        return any(host.endswith("." + d) for d in self._allowed_domains)
+        if any(host.endswith("." + d) for d in self._allowed_domains):
+            return True
+        # Terminal-resource relaxation: an off-domain *document* (the file the
+        # in-scope site pointed at) is fetchable; off-domain HTML is not, so no
+        # off-domain navigation is ever enabled. SSRF checks still apply on fetch.
+        return self._follow_linked_resources and _is_document_url(url)
 
     async def fetch(
         self,

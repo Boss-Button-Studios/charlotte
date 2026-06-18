@@ -2132,3 +2132,96 @@ async def test_staleness_guard_accepts_latest_when_all_old():
     found = [e for e in events if isinstance(e, ResultFound)]
     assert found, "an all-old site should still deliver its latest-available bulletin"
     assert found[0].url == _OLD_NEWER, "the most recent of the old bulletins should win"
+
+
+# ---------------------------------------------------------------------------
+# follow_linked_resources — terminal off-domain document, no off-domain nav
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_off_domain_document_followed_when_flag_set():
+    """With follow_linked_resources, an off-domain document the in-scope page links
+    to is enqueued, fetched, and returned — without listing its host in
+    allowed_domains. The off-domain HTML link on the same page is NOT followed."""
+    _HOME = "http://example.com/"
+    _PDF = "http://cdn.example.net/calendar.pdf"      # off-domain document
+    _OFF_HTML = "http://other.example.net/events"     # off-domain HTML (must not be followed)
+
+    fetch_map = {
+        _HOME: FetchResult(
+            url=_HOME,
+            html=(
+                f'<html><body><p>{_WORDS}</p>'
+                f'<a href="{_PDF}">Calendar PDF</a>'
+                f'<a href="{_OFF_HTML}">Events page</a>'
+                f'</body></html>'
+            ),
+            status_code=200, fetch_ms=0,
+        ),
+        _PDF: FetchResult(url=_PDF, html="", status_code=200, fetch_ms=0,
+                          raw_bytes=b"%PDF-1.4 calendar"),
+    }
+    fetched: list[str] = []
+
+    async def _mock_fetch(self, url, *, visited_urls, **kwargs):
+        fetched.append(url)
+        return fetch_map[url]
+
+    async def _mock_adapter(*, page_url, **kwargs):
+        # Model lists both off-domain links to follow (it doesn't claim either).
+        return {
+            "found": False, "confidence": 0.3, "result_url": None,
+            "links_to_follow": [_PDF, _OFF_HTML],
+            "reasoning": "calendar might be in one of these",
+        }
+
+    with patch("charlotte.core.fetcher.PageFetcher.fetch", _mock_fetch):
+        events = await _collect_events(crawl(
+            _HOME, "Find the latest calendar PDF",
+            model=_mock_adapter,
+            follow_linked_resources=True,
+            stream=True, respect_robots=False, default_delay=0.0,
+        ))
+
+    found = [e for e in events if isinstance(e, ResultFound)]
+    assert found and found[0].url == _PDF, "off-domain document should be retrieved"
+    assert _PDF in fetched
+    assert _OFF_HTML not in fetched, "off-domain HTML must never be followed (no off-domain nav)"
+
+
+@pytest.mark.asyncio
+async def test_off_domain_document_filtered_when_flag_off():
+    """Default (flag off): the same off-domain document is filtered at enqueue —
+    byte-identical to the historical start-domain-only scope."""
+    _HOME = "http://example.com/"
+    _PDF = "http://cdn.example.net/calendar.pdf"
+
+    fetch_map = {
+        _HOME: FetchResult(
+            url=_HOME,
+            html=f'<html><body><p>{_WORDS}</p><a href="{_PDF}">Calendar PDF</a></body></html>',
+            status_code=200, fetch_ms=0,
+        ),
+    }
+    fetched: list[str] = []
+
+    async def _mock_fetch(self, url, *, visited_urls, **kwargs):
+        fetched.append(url)
+        return fetch_map[url]
+
+    async def _mock_adapter(*, page_url, **kwargs):
+        return {
+            "found": False, "confidence": 0.3, "result_url": None,
+            "links_to_follow": [_PDF], "reasoning": "maybe here",
+        }
+
+    with patch("charlotte.core.fetcher.PageFetcher.fetch", _mock_fetch):
+        events = await _collect_events(crawl(
+            _HOME, "Find the latest calendar PDF",
+            model=_mock_adapter,
+            # follow_linked_resources defaults to False
+            stream=True, respect_robots=False, default_delay=0.0,
+        ))
+
+    assert _PDF not in fetched, "off-domain document must be filtered when flag is off"
+    assert not [e for e in events if isinstance(e, ResultFound)]
