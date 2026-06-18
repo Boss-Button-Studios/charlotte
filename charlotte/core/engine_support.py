@@ -443,7 +443,16 @@ def _build_binary_result(
         raw_name = Path(suggested_filename or "result").name
         filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
         file_path = result_to_file / filename
-        file_path.write_bytes(body)
+        try:
+            result_to_file.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(body)
+        except OSError as exc:
+            # result_to_file is caller-supplied; a missing/unwritable directory is a
+            # configuration problem. Re-raise as a named Charlotte error (never a raw
+            # OSError) per the trust/exception model.
+            raise CharlotteConfigError(
+                f"Could not write result to {result_to_file!r}: {exc}"
+            ) from exc
         out_content = None
 
     content = ResultContent(

@@ -47,6 +47,7 @@ import charlotte
 from charlotte import crawl
 from charlotte.adapters.local import LocalAdapter
 from charlotte.core import model_metrics
+from charlotte.core.normalizer import validate_url_safety
 from charlotte.models import (
     BudgetExhausted,
     CrawlComplete,
@@ -172,6 +173,9 @@ async def _resolve_gdrive(result_url: str, out_dir: Path) -> dict:
         return {"ok": False, "reason": "no Drive file id in result_url", "result_url": result_url}
     dl = f"https://drive.google.com/uc?export=download&id={quote(file_id, safe='')}"
     try:
+        # The resolver fetches outside Charlotte's engine, so re-apply the SSRF gate
+        # to these semi-trusted, model-derived URLs (CR, PR #47).
+        validate_url_safety(dl)
         async with httpx.AsyncClient(timeout=20, follow_redirects=True,
                                      headers={"User-Agent": _RESOLVER_UA}) as c:
             r = await c.get(dl)
@@ -205,6 +209,8 @@ async def _resolve_gcal(result_url: str, out_dir: Path) -> dict:
     navigation->feed->artifact path.
     """
     try:
+        # SSRF gate on these out-of-engine, model-derived fetches (CR, PR #47).
+        validate_url_safety(result_url)
         async with httpx.AsyncClient(timeout=20, follow_redirects=True,
                                      headers={"User-Agent": _RESOLVER_UA}) as c:
             ids = _GCAL_CALID_RE.findall(result_url)         # pointer carries it directly?
@@ -220,6 +226,7 @@ async def _resolve_gcal(result_url: str, out_dir: Path) -> dict:
             cal_id = ids[0]
             ics_url = (f"https://calendar.google.com/calendar/ical/"
                        f"{quote(cal_id, safe='')}/public/basic.ics")
+            validate_url_safety(ics_url)
             ics = await c.get(ics_url)
             is_ical = "BEGIN:VCALENDAR" in ics.text
             events = ics.text.count("BEGIN:VEVENT")
@@ -386,7 +393,10 @@ async def run_trial(trial: dict, run_dir: Path, adapter: LocalAdapter) -> TrialR
 
     except Exception as exc:  # noqa: BLE001 — exploratory harness
         result.error = f"{type(exc).__name__}: {exc}"
-        result.elapsed_ms = int((monotonic() - run_start) * 1000)
+        # Record the navigation time spent before the failure; elapsed_ms is
+        # recomputed below as navigate_ms + resolve_ms, so set navigate_ms (not
+        # elapsed_ms) or the total would collapse to just the resolver time.
+        result.navigate_ms = int((monotonic() - run_start) * 1000)
         print(f"  ERROR: {result.error}", flush=True)
 
     # ---- downstream hand-off: resolve Charlotte's pointer to the artifact ----

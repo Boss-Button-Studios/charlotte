@@ -33,6 +33,7 @@ from charlotte.exceptions import (
     CharlotteNetworkError,
     CharlotteRedirectError,
     CharlotteResponseTooLargeError,
+    CharlotteSSRFError,
     CharlotteTimeoutError,
     RobotsError,
 )
@@ -409,12 +410,36 @@ class PageFetcher:
                 extra_http_headers={"User-Agent": self._user_agent}
             )
             try:
-                resp = await context.request.get(
-                    url,
-                    timeout=(self._connect_timeout + self._render_timeout) * 1000,
+                # Follow redirects manually (max_redirects=0) so each hop is SSRF-
+                # and domain-checked BEFORE it is fetched — mirroring the httpx
+                # path. Otherwise Playwright follows redirects internally, past
+                # these gates, and a public document that redirects to a private or
+                # off-scope address would be fetched (the follow_linked_resources
+                # relaxation makes _is_allowed permit off-domain documents, so the
+                # domain check alone can no longer catch a redirect to a private IP).
+                current = url
+                for _hop in range(_MAX_REDIRECTS + 1):
+                    validate_url_safety(current)
+                    if not self._is_allowed(current):
+                        raise CharlotteRedirectError(
+                            f"Redirect from {url!r} to {current!r} crosses into "
+                            f"disallowed domain {self._hostname(current)!r}"
+                        )
+                    resp = await context.request.get(
+                        current,
+                        max_redirects=0,
+                        timeout=(self._connect_timeout + self._render_timeout) * 1000,
+                    )
+                    if 300 <= resp.status < 400:
+                        location = resp.headers.get("location", "")
+                        if location:
+                            current = urljoin(current, location)
+                            continue
+                    body = await resp.body()
+                    return resp.status, resp.url, body
+                raise CharlotteRedirectError(
+                    f"Redirect chain for {url!r} exceeded {_MAX_REDIRECTS} hops"
                 )
-                body = await resp.body()
-                return resp.status, resp.url, body
             finally:
                 await context.close()
 
@@ -441,6 +466,7 @@ class PageFetcher:
             CharlotteRedirectError,
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
+            CharlotteSSRFError,
         ):
             raise
         except Exception as exc:
@@ -594,6 +620,7 @@ class PageFetcher:
             CharlotteRedirectError,
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
+            CharlotteSSRFError,
         ):
             raise
         except Exception as exc:
