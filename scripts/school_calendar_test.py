@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
@@ -154,7 +154,9 @@ class TrialResult:
 # ---------------------------------------------------------------------------
 
 _DRIVE_ID_RE = re.compile(r"/file/d/([^/]+)/|[?&]id=([^&]+)")
-_GCAL_CID_RE = re.compile(r"[?&]cid=([^\"'&\s]+)")
+# Google Calendar identifies the calendar via cid= (share link) OR src= (embed).
+# Both carry the calendar id, sometimes percent-encoded (e.g. %40 for @).
+_GCAL_CALID_RE = re.compile(r"[?&](?:cid|src)=([^\"'&\s]+)")
 
 
 async def _resolve_gdrive(result_url: str, out_dir: Path) -> dict:
@@ -195,29 +197,37 @@ async def _resolve_gdrive(result_url: str, out_dir: Path) -> dict:
 
 
 async def _resolve_gcal(result_url: str, out_dir: Path) -> dict:
-    """Extract the Google Calendar cid from the result page and pull its .ics feed.
+    """Resolve a Google Calendar pointer to its public .ics feed.
 
-    Demonstrates the navigation->feed->artifact path: Charlotte points at the page,
-    the resolver finds the embed's cid and fetches the public iCal feed.
+    The calendar id may be in the pointer itself (a calendar.google.com embed/share
+    URL with src=/cid=) OR embedded in an in-scope page Charlotte returned. Try the
+    pointer first, then fall back to scanning the page. Demonstrates the
+    navigation->feed->artifact path.
     """
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True,
                                      headers={"User-Agent": _RESOLVER_UA}) as c:
-            page = await c.get(result_url)
-            cids = list(dict.fromkeys(_GCAL_CID_RE.findall(page.text)))
-            if not cids:
-                return {"ok": False, "reason": "no Google Calendar cid on result page",
+            ids = _GCAL_CALID_RE.findall(result_url)         # pointer carries it directly?
+            source = "result_url"
+            if not ids:
+                page = await c.get(result_url)               # else scan the page it points at
+                ids = _GCAL_CALID_RE.findall(page.text)
+                source = "result page"
+            ids = list(dict.fromkeys(unquote(i) for i in ids))
+            if not ids:
+                return {"ok": False, "reason": "no Google Calendar id in pointer or page",
                         "result_url": result_url}
-            cid = cids[0]
-            ics_url = f"https://calendar.google.com/calendar/ical/{quote(cid, safe='')}/public/basic.ics"
+            cal_id = ids[0]
+            ics_url = (f"https://calendar.google.com/calendar/ical/"
+                       f"{quote(cal_id, safe='')}/public/basic.ics")
             ics = await c.get(ics_url)
             is_ical = "BEGIN:VCALENDAR" in ics.text
             events = ics.text.count("BEGIN:VEVENT")
-            # crude June-2026 slice for the demo (downstream would parse properly)
-            jun = len(re.findall(r"DTSTART[^:]*:202606\d{2}", ics.text))
+            jun = len(re.findall(r"DTSTART[^:]*:202606\d{2}", ics.text))  # demo slice
             out = {
-                "ok": is_ical, "cids_found": cids, "ics_url": ics_url,
-                "is_ical": is_ical, "total_events": events, "june_2026_events": jun,
+                "ok": is_ical, "calendar_id": cal_id, "id_source": source,
+                "ics_url": ics_url, "is_ical": is_ical,
+                "total_events": events, "june_2026_events": jun,
             }
             if is_ical:
                 path = out_dir / "calendar.ics"
@@ -239,17 +249,29 @@ def _resolve_pdf(result: TrialResult, out_dir: Path) -> dict:
             "result_url": result.result_url}
 
 
+def _detect_platform(result: TrialResult) -> str:
+    """Pick the resolver from the pointer Charlotte actually returned — the real
+    landscape isn't known ahead of time, so don't trust the per-trial hint."""
+    url = result.result_url or ""
+    host = (urlsplit(url).hostname or "").lower()
+    if "calendar.google.com" in host or "cid=" in url or "src=" in url:
+        return "gcal"
+    if host.endswith("drive.google.com") or host.endswith("docs.google.com"):
+        return "gdrive"
+    if result.suggested_filename or url.lower().rsplit(".", 1)[-1] in {"pdf", "doc", "docx"}:
+        return "pdf"
+    return "gcal"  # an in-scope page pointer most likely hosts a calendar embed
+
+
 async def resolve(trial: dict, result: TrialResult, out_dir: Path) -> dict:
-    kind = trial["resolver"]
     if not result.found or not result.result_url:
         return {"ok": False, "reason": "Charlotte found no pointer to resolve"}
+    kind = _detect_platform(result)
     if kind == "pdf":
         return _resolve_pdf(result, out_dir)
     if kind == "gdrive":
         return await _resolve_gdrive(result.result_url, out_dir)
-    if kind == "gcal":
-        return await _resolve_gcal(result.result_url, out_dir)
-    return {"ok": False, "reason": f"unknown resolver {kind!r}"}
+    return await _resolve_gcal(result.result_url, out_dir)
 
 
 # ---------------------------------------------------------------------------
