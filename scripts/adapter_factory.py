@@ -28,8 +28,12 @@ Local path (Ollama):
 
 Groq path:
     GROQ_API_KEY              required; the GroqAdapter raises a clear, named
-                              CharlotteConfigError if it is missing.
-    GROQ_MODEL                model id (default: llama-3.1-8b-instant)
+                              CharlotteConfigError if it is missing. If not already
+                              exported, it is read from a gitignored .env at the
+                              project root (NAME=value lines; an exported value wins).
+    GROQ_MODEL                model id (default: llama-3.1-8b-instant). For a like-for-
+                              like comparison with the local deepseek-r1:14b reasoning
+                              model, use a Groq reasoning model: qwen/qwen3-32b.
 
 Groq rate limits: the free tier shares a ~6 000 tokens-per-minute sliding window
 across all requests. The GroqAdapter already retries 429s (max_retries=3, honours
@@ -41,10 +45,43 @@ against Groq, raise the script's inter-trial pause — e.g. CHARLOTTE_INTER_TRIA
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # Default Groq model. Kept here (not imported from the adapter) so the suite log
 # header can record the exact id that will be used even before the adapter is built.
 _GROQ_DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+# Project root holds an optional .env (gitignored) with GROQ_API_KEY / GROQ_MODEL.
+# adapter_factory.py lives in scripts/, so the root is its parent's parent.
+_DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv_for_groq() -> None:
+    """Populate os.environ from the project-root .env, for the Groq path only.
+
+    There is no secret store on this box, so the Groq key lives in a gitignored
+    .env. We parse simple NAME=value lines ourselves rather than add a dependency
+    (python-dotenv) for one file. An already-set environment variable always wins,
+    so an explicit `GROQ_API_KEY=... python3 ...` on the command line overrides the
+    file. Values are never logged — they flow straight into os.environ and on to
+    the adapter, which reads GROQ_API_KEY itself.
+    """
+    if not _DOTENV_PATH.is_file():
+        return
+    try:
+        lines = _DOTENV_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return  # An unreadable .env is not fatal: the adapter will report a missing key.
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name = name.strip()
+        # Strip surrounding quotes a user may have added; keep the value otherwise intact.
+        value = value.strip().strip('"').strip("'")
+        if name and name not in os.environ:
+            os.environ[name] = value
 
 
 def _build_local() -> tuple[object, str]:
@@ -71,6 +108,10 @@ def _build_groq() -> tuple[object, str]:
     already explains how to fix it — we do not pre-empt or reword that message.
     """
     from charlotte.adapters.groq import GroqAdapter
+
+    # Pick up GROQ_API_KEY / GROQ_MODEL from the project-root .env if not already
+    # exported, so the field suites run without the caller managing the environment.
+    _load_dotenv_for_groq()
 
     model = os.environ.get("GROQ_MODEL", _GROQ_DEFAULT_MODEL).strip() or _GROQ_DEFAULT_MODEL
     adapter = GroqAdapter(model=model)
