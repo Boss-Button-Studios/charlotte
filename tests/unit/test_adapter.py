@@ -433,6 +433,46 @@ def test_explicit_completion_budget_overrides_reasoning_default(monkeypatch):
     assert GroqAdapter(model="qwen/qwen3-32b", max_completion_tokens=900)._max_completion_tokens == 900
 
 
+def test_default_prompt_caps_are_free_tier_safe(monkeypatch):
+    """Value lock: the default prompt caps are load-bearing for free-tier safety. A
+    JS-rendered page's body + long-URL links must not push a single request past Groq's
+    per-request token ceiling (HTTP 413, which the SDK does not retry — every render_js
+    trial failed on the first call when these were 7 000/50). Do not raise these without
+    re-checking the 413 boundary against a real rendered page."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    assert adapter._max_page_chars == 4_500
+    assert adapter._max_prompt_links == 25
+
+
+async def test_oversized_page_and_links_are_trimmed_before_send(monkeypatch):
+    """Mechanism: regardless of how large the page or link list is, the adapter trims
+    to its caps before serialising — page content to max_page_chars, links to
+    max_prompt_links — so the request size is bounded by config, not by the page."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()  # defaults: 4500 page chars, 25 links
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(json.dumps(_VALID_NOT_FOUND))
+    )
+    marker = "UNIQUEWORD"
+    pathological = dict(
+        _PAGE_CONTEXT,
+        page_summary=("x" * 100_000) + marker,                    # marker past the cap
+        available_links=[
+            {"text": f"Calendar widget {i}", "url": f"https://calendar.google.com/c/{i}"}
+            for i in range(200)
+        ],
+    )
+    await adapter(**pathological)
+    user_msg = adapter._client.chat.completions.create.call_args[1]["messages"][1]["content"]
+    # Page content was truncated to the cap: the trailing marker never made it in.
+    assert marker not in user_msg
+    # Links were capped at 25: link #24 is present, link #25 (the 26th) is not.
+    assert "Calendar widget 24" in user_msg
+    assert "Calendar widget 25" not in user_msg
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — successful API call
 # ---------------------------------------------------------------------------

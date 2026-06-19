@@ -123,8 +123,17 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
-_DEFAULT_MAX_PAGE_CHARS: int = 7_000
-_DEFAULT_MAX_PROMPT_LINKS: int = 50
+# Prompt-size caps. These bound a single request's input tokens, which matters
+# acutely on Groq's free tier: a request is rejected with HTTP 413 once its
+# input + max_completion_tokens approaches the per-request token ceiling (a tight
+# few thousand tokens, and per-model). The link list is the worst offender — 50
+# long URLs (calendar cids, CDN paths) on a JS-rendered page pushed prompts past
+# ~16 000 chars (~5 000 tokens) and 413'd on the first call. The link ranker orders
+# links best-first, so the top 25 keep the navigable ones; 4 500 page chars keep
+# the summary useful. Together they hold a worst-case prompt near ~12 000 chars,
+# well under the ceiling, turning hard 413s into at-worst retryable 429 throttling.
+_DEFAULT_MAX_PAGE_CHARS: int = 4_500
+_DEFAULT_MAX_PROMPT_LINKS: int = 25
 # A non-reasoning model's navigation JSON is small; 700 output tokens is generous,
 # and keeping it tight conserves Groq's 6 000 TPM free-tier budget.
 _DEFAULT_MAX_COMPLETION_TOKENS: int = 700
@@ -158,11 +167,13 @@ class GroqAdapter:
     raised. See spec §6.3.
 
     ``max_page_chars`` and ``max_prompt_links`` trim the page content and link
-    list before serialising the prompt. Groq's free tier allows 6 000 tokens
-    per minute (sliding window) shared across all requests; the defaults keep
-    each prompt under ~3 500 tokens. Back-to-back model calls on a multi-page
-    crawl will exhaust this budget and trigger 429 rate limits — up to 3 retries
-    are attempted before raising. Upgrade to a Dev-tier key for higher limits.
+    list before serialising the prompt. Groq's free tier enforces a tight, per-model
+    tokens-per-minute limit and rejects any single request whose input plus
+    completion budget exceeds the per-request ceiling (HTTP 413). The defaults hold a
+    worst-case prompt near ~12 000 chars (~4 000 tokens) so a single request stays
+    under that ceiling; back-to-back calls on a multi-page crawl can still exhaust the
+    minute window and trigger 429s — up to 3 retries are attempted before raising.
+    Upgrade to a Dev-tier key for higher limits.
     """
 
     def __init__(
