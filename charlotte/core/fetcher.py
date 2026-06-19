@@ -33,6 +33,7 @@ from charlotte.exceptions import (
     CharlotteNetworkError,
     CharlotteRedirectError,
     CharlotteResponseTooLargeError,
+    CharlotteSSRFError,
     CharlotteTimeoutError,
     RobotsError,
 )
@@ -163,8 +164,14 @@ class PageFetcher:
         chromium_executable: str | None = None,
         max_response_bytes: int = 10 * 1024 * 1024,
         user_agent: str = HTTP_USER_AGENT,
+        follow_linked_resources: bool = False,
     ) -> None:
         self._render_js = render_js
+        # When True, an off-domain URL is fetchable only if it is a document
+        # (PDF/DOCX/etc.) — a terminal resource the in-scope site linked to.
+        # Off-domain HTML is still refused, so this never enables off-domain
+        # navigation/crawling. SSRF validation (validate_url_safety) is unaffected.
+        self._follow_linked_resources = follow_linked_resources
         self._render_timeout = render_timeout
         # None → use Playwright's bundled Chromium; non-None → use this path instead.
         # Useful on OS versions Playwright doesn't yet support (e.g. Ubuntu 26.04).
@@ -191,7 +198,12 @@ class PageFetcher:
         host = self._hostname(url)
         if host in self._allowed_domains:
             return True
-        return any(host.endswith("." + d) for d in self._allowed_domains)
+        if any(host.endswith("." + d) for d in self._allowed_domains):
+            return True
+        # Terminal-resource relaxation: an off-domain *document* (the file the
+        # in-scope site pointed at) is fetchable; off-domain HTML is not, so no
+        # off-domain navigation is ever enabled. SSRF checks still apply on fetch.
+        return self._follow_linked_resources and _is_document_url(url)
 
     async def fetch(
         self,
@@ -237,7 +249,10 @@ class PageFetcher:
                 # bot-detection headers checks without page rendering.
                 try:
                     return await asyncio.wait_for(
-                        self._fetch_document_with_playwright(url, visited_urls=visited_urls),
+                        self._fetch_document_with_playwright(
+                            url, visited_urls=visited_urls,
+                            robots_handler=robots_handler, default_delay=default_delay,
+                        ),
                         timeout=_total_pw_timeout,
                     )
                 except asyncio.TimeoutError:
@@ -373,7 +388,9 @@ class PageFetcher:
                     ) from exc
 
     async def _fetch_document_with_playwright(
-        self, url: str, *, visited_urls: set[str]
+        self, url: str, *, visited_urls: set[str],
+        robots_handler: "RobotsHandler | None" = None,
+        default_delay: float = 0.0,
     ) -> FetchResult:
         """Fetch a binary document using Playwright's APIRequestContext.
 
@@ -398,12 +415,44 @@ class PageFetcher:
                 extra_http_headers={"User-Agent": self._user_agent}
             )
             try:
-                resp = await context.request.get(
-                    url,
-                    timeout=(self._connect_timeout + self._render_timeout) * 1000,
+                # Follow redirects manually (max_redirects=0) so each hop is SSRF-
+                # and domain-checked BEFORE it is fetched — mirroring the httpx
+                # path. Otherwise Playwright follows redirects internally, past
+                # these gates, and a public document that redirects to a private or
+                # off-scope address would be fetched (the follow_linked_resources
+                # relaxation makes _is_allowed permit off-domain documents, so the
+                # domain check alone can no longer catch a redirect to a private IP).
+                current = url
+                for _hop in range(_MAX_REDIRECTS + 1):
+                    validate_url_safety(current)
+                    if not self._is_allowed(current):
+                        raise CharlotteRedirectError(
+                            f"Redirect from {url!r} to {current!r} crosses into "
+                            f"disallowed domain {self._hostname(current)!r}"
+                        )
+                    resp = await context.request.get(
+                        current,
+                        max_redirects=0,
+                        timeout=(self._connect_timeout + self._render_timeout) * 1000,
+                    )
+                    if 300 <= resp.status < 400:
+                        location = resp.headers.get("location", "")
+                        if location:
+                            destination = urljoin(current, location)
+                            # Cross-host robots check — permissions don't inherit
+                            # across domains (spec §11.1); mirrors the httpx path.
+                            if (
+                                robots_handler is not None
+                                and self._hostname(destination) != self._hostname(current)
+                            ):
+                                await robots_handler.check(destination, default_delay)
+                            current = destination
+                            continue
+                    body = await resp.body()
+                    return resp.status, resp.url, body
+                raise CharlotteRedirectError(
+                    f"Redirect chain for {url!r} exceeded {_MAX_REDIRECTS} hops"
                 )
-                body = await resp.body()
-                return resp.status, resp.url, body
             finally:
                 await context.close()
 
@@ -430,6 +479,8 @@ class PageFetcher:
             CharlotteRedirectError,
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
+            CharlotteSSRFError,
+            RobotsError,
         ):
             raise
         except Exception as exc:
@@ -583,6 +634,8 @@ class PageFetcher:
             CharlotteRedirectError,
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
+            CharlotteSSRFError,
+            RobotsError,
         ):
             raise
         except Exception as exc:

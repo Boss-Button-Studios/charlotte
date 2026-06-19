@@ -31,6 +31,7 @@ from charlotte.models import (
 
 if TYPE_CHECKING:
     from datetime import date
+    from pathlib import Path
 
     from charlotte.models import (
         FailureMode,
@@ -393,6 +394,7 @@ def _build_binary_result(
     url: str,
     body: bytes,
     goal_context: "GoalContext",
+    result_to_file: "Path | None" = None,
 ) -> "tuple[VerificationResult, ResultContent | None]":
     """Build a verification result for binary content already fetched by the engine.
 
@@ -400,8 +402,15 @@ def _build_binary_result(
     APIRequestContext — avoids a second httpx round-trip in the verifier, which
     would fail on servers whose bot-detection blocks plain httpx but allows
     real browser requests.
+
+    Because this path bypasses the verifier, it must reproduce the verifier's
+    content delivery: when result_to_file is set, the bytes are written to disk
+    (with the same path-traversal-safe filename handling) rather than returned
+    in memory — otherwise render_js document_link results would silently drop
+    their file (spec §7.7).
     """
     from datetime import datetime, timezone
+    from pathlib import Path
     from urllib.parse import urlsplit
 
     from charlotte.models import ResultContent, VerificationResult
@@ -426,13 +435,33 @@ def _build_binary_result(
     last_seg = path.rsplit("/", 1)[-1] if path else ""
     suggested_filename = last_seg if ("." in last_seg) else None
 
+    file_path: "Path | None" = None
+    out_content: "bytes | None" = body
+    if result_to_file is not None:
+        # Sanitize to basename — URL paths are attacker-controlled; strip parent
+        # components to prevent traversal. Mirrors DefaultDestinationVerifier.
+        raw_name = Path(suggested_filename or "result").name
+        filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
+        file_path = result_to_file / filename
+        try:
+            result_to_file.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(body)
+        except OSError as exc:
+            # result_to_file is caller-supplied; a missing/unwritable directory is a
+            # configuration problem. Re-raise as a named Charlotte error (never a raw
+            # OSError) per the trust/exception model.
+            raise CharlotteConfigError(
+                f"Could not write result to {result_to_file!r}: {exc}"
+            ) from exc
+        out_content = None
+
     content = ResultContent(
-        content=body,
+        content=out_content,
         content_type=None,
         content_length=len(body),
         suggested_filename=suggested_filename,
         etag=None,
         fetched_at=datetime.now(timezone.utc),
-        file_path=None,
+        file_path=file_path,
     )
     return result, content

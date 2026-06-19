@@ -56,6 +56,7 @@ def crawl(
     confidence_threshold: float = 0.70,
     render_js: bool = False,
     allowed_domains: "list[str] | None" = None,
+    follow_linked_resources: bool = False,
     return_content: bool = False,
     navigation_hint: "str | None" = None,
     stream: "bool | None" = None,
@@ -88,6 +89,11 @@ def crawl(
         verify_threshold:    BM25/embedding threshold (default 0.3). See spec §7.3.
         fetch_result_content: Capture bytes per result. None = on for document_link.
         result_to_file:      Directory for file-based content delivery. See spec §7.7.
+        follow_linked_resources: If True, permit fetching an off-domain *document*
+                             (PDF/etc.) that an in-scope page links to — a terminal,
+                             one-hop resource fetch. Off-domain HTML is never
+                             followed (no off-domain navigation); SSRF checks still
+                             apply. Default False keeps the start-domain-only scope.
         stream:              True → AsyncGenerator; False → Coroutine[CrawlResult].
 
     Raises:
@@ -167,6 +173,8 @@ def crawl(
         chromium_executable=chromium_executable,
         max_response_bytes=max_response_bytes,
         user_agent=resolved_user_agent,
+        follow_linked_resources=follow_linked_resources,
+        result_to_file=result_to_file,
         preprocessor=_preprocessor,
         ranker=_ranker,
         candidate_extractor=_extractor,

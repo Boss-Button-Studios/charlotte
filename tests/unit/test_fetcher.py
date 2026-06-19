@@ -666,3 +666,69 @@ async def test_httpx_fetch_raises_challenge_error_on_interstitial():
     )
     with pytest.raises(CharlotteChallengeError, match="declines automated access"):
         await _fetcher().fetch(f"{_BASE}/bulletin", visited_urls=set())
+
+
+# ---------------------------------------------------------------------------
+# follow_linked_resources — terminal off-domain document retrieval
+# ---------------------------------------------------------------------------
+
+def test_is_allowed_relaxation_documents_only():
+    """With follow_linked_resources, off-domain *documents* are fetchable but
+    off-domain HTML is not — so navigation never leaves the start domain."""
+    strict = PageFetcher(allowed_domains={"school.org"})
+    relaxed = PageFetcher(allowed_domains={"school.org"}, follow_linked_resources=True)
+    # in-domain: always allowed
+    assert strict._is_allowed("https://school.org/x") is True
+    assert relaxed._is_allowed("https://school.org/x") is True
+    # off-domain document: allowed only when the flag is set
+    assert strict._is_allowed("https://cdn.finalsite.net/cal.pdf") is False
+    assert relaxed._is_allowed("https://cdn.finalsite.net/cal.pdf") is True
+    # off-domain HTML: refused either way (no off-domain navigation)
+    assert relaxed._is_allowed("https://evil.example/page.html") is False
+    assert relaxed._is_allowed("https://drive.google.com/file/d/ID/view") is False
+
+
+@respx.mock
+async def test_follow_linked_resources_does_not_bypass_ssrf():
+    """The relaxation must not open SSRF: an off-domain 'document' on a private IP
+    is still blocked by validate_url_safety, which runs regardless of domain policy."""
+    from charlotte.exceptions import CharlotteSSRFError
+    relaxed = PageFetcher(allowed_domains={"school.org"}, follow_linked_resources=True)
+    with pytest.raises(CharlotteSSRFError):
+        await relaxed.fetch("http://127.0.0.1/calendar.pdf", visited_urls=set())
+
+
+@pytest.mark.asyncio
+async def test_document_playwright_blocks_redirect_to_private_ip():
+    """follow_linked_resources + render_js + a public .pdf that redirects to a
+    private-IP .pdf must be blocked by per-hop SSRF validation, before the redirect
+    is followed (CR, PR #47). Playwright would otherwise follow it internally."""
+    from unittest.mock import AsyncMock, MagicMock
+    from charlotte.exceptions import CharlotteSSRFError
+
+    class _DummyTimeout(Exception):  # distinct, so it doesn't swallow SSRF
+        pass
+
+    redirect = MagicMock()
+    redirect.status = 302
+    redirect.headers = {"location": "http://127.0.0.1/secret.pdf"}
+    ctx = MagicMock()
+    ctx.request.get = AsyncMock(return_value=redirect)
+    ctx.close = AsyncMock()
+    browser = MagicMock()
+    browser.new_context = AsyncMock(return_value=ctx)
+
+    with patch("charlotte.core.fetcher._import_playwright",
+               lambda: (lambda *a, **k: None, _DummyTimeout)):
+        fetcher = PageFetcher(allowed_domains={"school.org"}, render_js=True,
+                              follow_linked_resources=True)
+    fetcher._browser = browser  # use the mocked shared browser
+
+    # Public-IP document (passes SSRF + the off-domain-document relaxation), which
+    # 302s to a loopback document. The second hop must be rejected.
+    with pytest.raises(CharlotteSSRFError):
+        await fetcher.fetch("http://93.184.216.34/calendar.pdf", visited_urls=set())
+
+    # Validation happened BEFORE the redirect was followed: only the public URL was
+    # ever requested; the loopback hop was rejected, never fetched.
+    assert ctx.request.get.await_count == 1

@@ -61,6 +61,8 @@ from charlotte.models import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from charlotte.core.candidate_extractor import CandidateExtractorProtocol
     from charlotte.core.destination_verifier import DestinationVerifierProtocol
     from charlotte.core.goal_preprocessor import GoalPreprocessorProtocol
@@ -95,6 +97,8 @@ async def _crawl_core(
     chromium_executable: "str | None",
     max_response_bytes: int,
     user_agent: str,
+    follow_linked_resources: bool,
+    result_to_file: "Path | None",
     preprocessor: "GoalPreprocessorProtocol",
     ranker: "LinkRankerProtocol",
     candidate_extractor: "CandidateExtractorProtocol",
@@ -154,6 +158,7 @@ async def _crawl_core(
         chromium_executable=chromium_executable,
         max_response_bytes=max_response_bytes,
         user_agent=user_agent,
+        follow_linked_resources=follow_linked_resources,
     ) as fetcher:
 
         _q_serial = 0
@@ -235,7 +240,9 @@ async def _crawl_core(
                     # Bytes already captured by Playwright APIRequestContext (render_js=True).
                     # Skip verifier re-fetch — the same server-side bot detection that
                     # blocks plain httpx would also block the verifier's httpx request.
-                    vresult, vcontent = _build_binary_result(page.url, page.raw_bytes, goal_context)
+                    vresult, vcontent = _build_binary_result(
+                        page.url, page.raw_bytes, goal_context, result_to_file=result_to_file,
+                    )
                 else:
                     vresult, vcontent = await _verify_candidate(verifier, page.url, goal_context)
                 if not vresult.passed:
@@ -460,7 +467,12 @@ async def _crawl_core(
                     continue
                 link_host = (urlsplit(norm_link).hostname or "").lower()
                 if not _domain_allowed(link_host, allowed_domains):
-                    continue
+                    # Terminal-resource relaxation: an off-domain *document* the
+                    # in-scope page links to may be enqueued (it goes through the
+                    # binary short-circuit — verified, never crawled onward). Off-
+                    # domain HTML stays filtered, so navigation never leaves scope.
+                    if not (follow_linked_resources and _is_document_url(link_url)):
+                        continue
                 if norm_link in visited:
                     continue
                 if skip_stale_links and _is_stale_dated_document(
