@@ -45,7 +45,8 @@ import httpx
 
 import charlotte
 from charlotte import crawl
-from charlotte.adapters.local import LocalAdapter
+from adapter_factory import build_adapter
+from charlotte.adapters.base import AdapterProtocol
 from charlotte.core import model_metrics
 from charlotte.core.normalizer import validate_url_safety
 from charlotte.models import (
@@ -285,7 +286,7 @@ async def resolve(trial: dict, result: TrialResult, out_dir: Path) -> dict:
 # Runner
 # ---------------------------------------------------------------------------
 
-async def run_trial(trial: dict, run_dir: Path, adapter: LocalAdapter) -> TrialResult:
+async def run_trial(trial: dict, run_dir: Path, adapter: AdapterProtocol) -> TrialResult:
     result = TrialResult(name=trial["name"], slug=trial["slug"], url=trial["url"])
     trial_dir = run_dir / trial["slug"]
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -443,10 +444,11 @@ async def main() -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = OUT_DIR / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
-    adapter = LocalAdapter()
+    adapter, adapter_label = build_adapter()
 
     print(f"\nCharlotte {charlotte.__version__}  —  school calendar retrieval")
     print(f"run dir : {run_dir}")
+    print(f"model   : {adapter_label}")
 
     results: list[TrialResult] = []
     for i, trial in enumerate(TRIALS):
@@ -457,6 +459,7 @@ async def main() -> None:
     summary = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "charlotte_version": charlotte.__version__,
+        "model": adapter_label,
         "navigated": sum(1 for r in results if r.found),
         "resolved": sum(1 for r in results if r.resolution.get("ok")),
         "total": len(results),

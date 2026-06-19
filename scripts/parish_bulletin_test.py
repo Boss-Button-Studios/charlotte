@@ -34,13 +34,10 @@ from pathlib import Path
 from time import monotonic
 
 import charlotte
+from adapter_factory import build_adapter
 from charlotte import crawl
-from charlotte.adapters.local import LocalAdapter
+from charlotte.adapters.base import AdapterProtocol
 from charlotte.core import model_metrics
-
-# Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
-# The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
-CHROMIUM_EXECUTABLE: str | None = None
 from charlotte.models import (
     BudgetExhausted,
     CrawlComplete,
@@ -54,6 +51,10 @@ from charlotte.models import (
     PageSkipped,
     ResultFound,
 )
+
+# Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
+# The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
+CHROMIUM_EXECUTABLE: str | None = None
 
 # ---------------------------------------------------------------------------
 # Config
@@ -176,7 +177,7 @@ class ParishResult:
 # ---------------------------------------------------------------------------
 
 async def run_parish(
-    parish: dict, run_dir: Path, adapter: LocalAdapter,
+    parish: dict, run_dir: Path, adapter: AdapterProtocol,
 ) -> ParishResult:
     result = ParishResult(name=parish["name"], slug=parish["slug"], url=parish["url"])
     parish_dir = run_dir / parish["slug"]
@@ -347,10 +348,11 @@ async def main() -> None:
     run_dir = BULLETINS_DIR / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    adapter = LocalAdapter()
+    adapter, adapter_label = build_adapter()
 
     print(f"\nCharlotte {charlotte.__version__}  —  parish bulletin retrieval")
     print(f"run dir : {run_dir}")
+    print(f"model   : {adapter_label}")
     print(f"goal    : {GOAL}")
 
     results: list[ParishResult] = []
@@ -364,6 +366,7 @@ async def main() -> None:
     summary = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "charlotte_version": charlotte.__version__,
+        "model": adapter_label,
         "goal": GOAL,
         "found": sum(1 for r in results if r.found),
         "total": len(results),

@@ -16,12 +16,15 @@ Usage:
 Filters are OR'd: a trial is included if it matches any filter argument.
 Numeric and substring filters can be freely mixed.
 
-Env vars (same as crawl_test.py):
-    CHARLOTTE_LOCAL_MODEL         — model name (default: llama3:8b)
-    CHARLOTTE_MODEL_TIMEOUT       — seconds before a model call is abandoned
-    CHARLOTTE_MODEL_VERBOSE       — stream model tokens to stderr (default: false)
+Env vars:
+    CHARLOTTE_ADAPTER             — model provider: "local" (default) or "groq".
+                                    See adapter_factory.py for per-provider vars
+                                    (CHARLOTTE_LOCAL_MODEL / GROQ_API_KEY / GROQ_MODEL).
+    CHARLOTTE_MODEL_TIMEOUT       — seconds before a model call is abandoned (local)
+    CHARLOTTE_MODEL_VERBOSE       — stream model tokens to stderr (local; default: false)
     CHARLOTTE_CONFIDENCE_THRESHOLD — minimum confidence to record a result (default: 0.70)
-    CHARLOTTE_INTER_TRIAL_DELAY   — seconds to wait between trials (default: 2.0)
+    CHARLOTTE_INTER_TRIAL_DELAY   — seconds to wait between trials (default: 2.0;
+                                    raise to ~15 on Groq's free tier to respect TPM limits)
 """
 
 from __future__ import annotations
@@ -36,8 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 
+from adapter_factory import build_adapter
 from charlotte import crawl
-from charlotte.adapters.local import LocalAdapter
+from charlotte.adapters.base import AdapterProtocol
 from charlotte.models import (
     BudgetExhausted,
     CandidatesExtracted,
@@ -57,9 +61,6 @@ from charlotte.models import (
 # Config
 # ---------------------------------------------------------------------------
 
-_model_timeout_env = os.environ.get("CHARLOTTE_MODEL_TIMEOUT")
-MODEL_TIMEOUT = float(_model_timeout_env) if _model_timeout_env else None
-MODEL_VERBOSE = os.environ.get("CHARLOTTE_MODEL_VERBOSE", "").strip().lower() == "true"
 CONFIDENCE_THRESHOLD = float(os.environ.get("CHARLOTTE_CONFIDENCE_THRESHOLD", "0.70"))
 INTER_TRIAL_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "2.0"))
 
@@ -259,7 +260,7 @@ class TrialResult:
         return True
 
 
-async def run_trial(trial: Trial, adapter: LocalAdapter) -> TrialResult:
+async def run_trial(trial: Trial, adapter: AdapterProtocol) -> TrialResult:
     result = TrialResult(name=trial.name, url=trial.url, goal=trial.goal, tags=trial.tags,
                          expected_url_contains=trial.expected_url_contains)
     run_start = monotonic()
@@ -573,13 +574,13 @@ async def main() -> None:
         print("Run with --list to see available trials.")
         sys.exit(1)
 
-    adapter = LocalAdapter(timeout=MODEL_TIMEOUT, verbose=MODEL_VERBOSE)
+    adapter, adapter_label = build_adapter()
 
     ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     run_dir = SUITES_DIR / ts
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Model:      {adapter._model}")
+    print(f"Model:      {adapter_label}")
     print(f"Run dir:    {run_dir}")
     print(f"Trials:     {len(trials)}")
     print(f"Threshold:  {CONFIDENCE_THRESHOLD}")
@@ -616,14 +617,14 @@ async def main() -> None:
         )
         print()
 
-        write_trial_log(run_dir, idx, trial, result, adapter._model)
+        write_trial_log(run_dir, idx, trial, result, adapter_label)
         results.append(result)
 
         if idx < len(trials):
             await asyncio.sleep(INTER_TRIAL_DELAY)
 
     suite_elapsed_ms = int((monotonic() - suite_start) * 1000)
-    summary_path = write_summary(run_dir, results, adapter._model, suite_elapsed_ms)
+    summary_path = write_summary(run_dir, results, adapter_label, suite_elapsed_ms)
 
     print_summary_table(results)
     print()
@@ -632,4 +633,5 @@ async def main() -> None:
     print(f"Summary →       {summary_path}")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
