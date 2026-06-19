@@ -13,16 +13,16 @@ from charlotte.core.adapter_validation import call_with_validation
 from charlotte.core.engine_support import (
     _build_binary_result,
     _build_crawl_result,
-    _check_result,
     _content_metadata,
     _domain_allowed,
     _elapsed_ms,
     _empty_result,
-    _fresher_exploration_links,
     _is_stale_dated_document,
     _make_links_ranked,
+    _page_offers_fresher_path,
     _rank_links,
     _queue_has_unvisited,
+    _resolve_effective_result,
     _run_extractor,
     _select_fallback_links,
     _verify_candidate,
@@ -394,39 +394,12 @@ async def _crawl_core(
                     yield PageSkipped(url=page.url, reason=f"Plausibility ({model_summary}): {reason}", error_type=None)
                     continue
 
-            effective_found, effective_result_url, effective_links = _check_result(
+            # Provenance + answer gate, then the claim-path staleness downgrade.
+            effective_found, effective_result_url, effective_links = _resolve_effective_result(
                 output, page, extracted,
+                goal_context=goal_context, ranked=_rl,
+                visited=visited, allowed_domains=allowed_domains,
             )
-
-            # Staleness guard: for a temporal "latest …" document goal, don't claim
-            # a clearly-old dated bulletin while a fresher path is still unexplored
-            # (e.g. a homepage's stale embedded widget vs. a "view all bulletins"
-            # link to the current issue). Downgrade the claim and steer the crawl
-            # toward the fresher links instead. The stale URL is still recorded as
-            # the best-effort candidate via the unfound branch below, so nothing is
-            # lost if exploration finds nothing newer.
-            if (
-                effective_found
-                and effective_result_url is not None
-                and goal_context.reference_date is not None
-                and goal_context.goal_type == "document_link"
-                and _is_stale_dated_document(effective_result_url, goal_context.reference_date)
-            ):
-                fresher = _fresher_exploration_links(
-                    _rl,
-                    stale_url=effective_result_url,
-                    reference_date=goal_context.reference_date,
-                    visited=visited,
-                    allowed_domains=allowed_domains,
-                )
-                if fresher:
-                    logger.debug(
-                        "Staleness guard: downgrading stale claim %r; exploring %d fresher link(s)",
-                        effective_result_url, len(fresher),
-                    )
-                    effective_found = False
-                    effective_result_url = None
-                    effective_links = list(effective_links) + fresher
 
             visit_log.append(VisitLogEntry(
                 url=page.url,
@@ -436,23 +409,11 @@ async def _crawl_core(
                 reasoning=output.reasoning,
             ))
 
-            # Staleness guard (links path): for a temporal "latest …" document goal,
-            # don't enqueue a clearly-stale dated document when this page offers a
-            # fresher path. Otherwise the binary short-circuit would accept that old
-            # bulletin straight off the queue, bypassing the claim-path guard above —
-            # the Mary Star case, where the model puts the stale homepage-widget PDF
-            # in links_to_follow rather than claiming it. A page with no fresher path
-            # (e.g. a parish behind on uploads, an all-old date grid) yields no
-            # fresher links, so stale documents are still enqueued and the
-            # latest-available one is accepted. stale_url="" excludes nothing extra;
-            # the call answers "does this page offer any fresher, goal-relevant link?"
-            skip_stale_links = (
-                goal_context.reference_date is not None
-                and goal_context.goal_type == "document_link"
-                and bool(_fresher_exploration_links(
-                    _rl, stale_url="", reference_date=goal_context.reference_date,
-                    visited=visited, allowed_domains=allowed_domains,
-                ))
+            # Links-path staleness gate: don't enqueue stale dated documents from a
+            # page that offers a fresher path (else the binary short-circuit accepts
+            # an old bulletin off the queue, bypassing the claim-path guard).
+            skip_stale_links = _page_offers_fresher_path(
+                goal_context, ranked=_rl, visited=visited, allowed_domains=allowed_domains,
             )
 
             enqueued = 0

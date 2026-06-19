@@ -32,7 +32,12 @@ from bs4 import BeautifulSoup
 from charlotte.config import CharlotteConfig
 from charlotte.core.normalizer import validate_url_safety
 from charlotte.core.text_normalization import tokenize
-from charlotte.exceptions import CharlotteNetworkError, CharlotteResponseTooLargeError, CharlotteTimeoutError
+from charlotte.exceptions import (
+    CharlotteConfigError,
+    CharlotteNetworkError,
+    CharlotteResponseTooLargeError,
+    CharlotteTimeoutError,
+)
 from charlotte.models import ResultContent, VerificationResult
 
 if TYPE_CHECKING:
@@ -240,6 +245,16 @@ class DefaultDestinationVerifier:
         self._threshold = verify_threshold
         self._fetch_content = fetch_result_content
         self._max_bytes = max_result_bytes
+        # Fail fast on an unusable result_to_file: this is a configuration error and
+        # must surface before any network I/O, not mid-crawl after a fetch. Creating
+        # the directory here also makes the later write a no-op on the happy path.
+        if result_to_file is not None:
+            try:
+                result_to_file.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise CharlotteConfigError(
+                    f"result_to_file is not a usable directory: {result_to_file!r}: {exc}"
+                ) from exc
         self._result_to_file = result_to_file
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
@@ -460,7 +475,16 @@ class DefaultDestinationVerifier:
             raw_name = Path(suggested_filename or "result").name
             filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
             file_path = self._result_to_file / filename
-            file_path.write_bytes(body)
+            try:
+                self._result_to_file.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(body)
+            except OSError as exc:
+                # result_to_file is caller-supplied; a missing/unwritable directory is
+                # a configuration problem. Re-raise as a named Charlotte error (never a
+                # raw OSError) per the trust/exception model.
+                raise CharlotteConfigError(
+                    f"Could not write result to {self._result_to_file!r}: {exc}"
+                ) from exc
             content = None
 
         return ResultContent(

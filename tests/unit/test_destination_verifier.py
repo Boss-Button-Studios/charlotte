@@ -603,3 +603,25 @@ async def test_non_document_link_html_response_passes_relevance():
     v = _verifier()
     result, _ = await v(url=_URL, goal_context=_ctx(goal_type="navigation"))
     assert result.passed is True
+
+
+def test_unusable_result_to_file_raises_config_error_at_construction(tmp_path):
+    """An unusable result_to_file (points at a file, not a dir) is a configuration
+    error and is rejected eagerly at construction — before any network I/O — as a
+    named CharlotteConfigError, never a raw OSError. This is the 'fail fast on bad
+    config' rule: a mid-crawl write failure after a fetch is the wrong place to learn
+    the destination is invalid."""
+    from charlotte.exceptions import CharlotteConfigError
+    blocked = tmp_path / "not_a_dir"
+    blocked.write_text("i am a file")
+    with pytest.raises(CharlotteConfigError):
+        _verifier(mode="existence", result_to_file=blocked)
+
+
+def test_result_to_file_directory_created_eagerly_at_construction(tmp_path):
+    """A not-yet-existing result_to_file directory is created at construction, so the
+    later result write is a no-op on the happy path."""
+    target = tmp_path / "new" / "nested"
+    assert not target.exists()
+    _verifier(mode="existence", result_to_file=target)
+    assert target.is_dir()

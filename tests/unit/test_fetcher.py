@@ -215,6 +215,33 @@ async def test_render_js_already_visited_final_url_raises_redirect_error():
         await fetcher.fetch("http://example.com/new", visited_urls=visited)
 
 
+@pytest.mark.asyncio
+async def test_render_js_private_ip_url_raises_ssrf_before_navigation():
+    """The HTML render path validates the target before page.goto(), matching the
+    httpx and document paths. A private-IP target is refused before any navigation,
+    and page.goto() is never awaited."""
+    from charlotte.exceptions import CharlotteSSRFError
+
+    fetcher, _ = _make_playwright_fetcher(url="http://127.0.0.1/admin")
+    with pytest.raises(CharlotteSSRFError):
+        await fetcher.fetch("http://127.0.0.1/admin", visited_urls=set())
+
+
+@pytest.mark.asyncio
+async def test_render_js_redirect_to_private_ip_final_url_raises_ssrf():
+    """page.goto() follows redirects internally, so a public URL can land on a
+    private address. The post-navigation SSRF re-check refuses to return that body,
+    blocking exfiltration via redirect."""
+    from charlotte.exceptions import CharlotteSSRFError
+
+    fetcher, _ = _make_playwright_fetcher(
+        url="http://example.com/page",
+        final_url="http://169.254.169.254/latest/meta-data/",
+    )
+    with pytest.raises(CharlotteSSRFError):
+        await fetcher.fetch("http://example.com/page", visited_urls=set())
+
+
 # ---------------------------------------------------------------------------
 # Playwright context manager — shared browser lifecycle
 # ---------------------------------------------------------------------------
