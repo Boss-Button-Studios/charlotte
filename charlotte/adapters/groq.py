@@ -290,6 +290,23 @@ class GroqAdapter:
                     f"{self._max_completion_tokens}. A reasoning model's thinking tokens "
                     "count toward this budget — increase max_completion_tokens."
                 ) from None
+            # A 413 means prompt_tokens + max_completion_tokens exceeded the account's
+            # per-request token ceiling (Groq's free tier caps a single request at its
+            # 6 000 TPM limit). Status code carries no secrets. This is the wall a
+            # reasoning model hits on the free tier: its large budget plus a full page
+            # prompt overflows 6 000. Name the fix instead of "see logs".
+            if getattr(exc, "status_code", None) == 413:
+                logger.debug(
+                    "Groq 413 request too large at max_completion_tokens=%d",
+                    self._max_completion_tokens,
+                )
+                raise AdapterOutputError(
+                    "Groq rejected the request as too large (413): the prompt plus "
+                    f"max_completion_tokens={self._max_completion_tokens} exceeds the "
+                    "account's per-request token limit (free tier: 6 000). Reduce "
+                    "max_completion_tokens, max_page_chars, or max_prompt_links — or "
+                    "use a higher Groq tier."
+                ) from None
             # Suppress chain — groq SDK exceptions may contain API keys or
             # provider response bodies. Log type only, never exc_info. See §6.5, §18.
             logger.debug("Groq API call failed: %s", type(exc).__name__)

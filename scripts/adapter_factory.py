@@ -31,9 +31,13 @@ Groq path:
                               CharlotteConfigError if it is missing. If not already
                               exported, it is read from a gitignored .env at the
                               project root (NAME=value lines; an exported value wins).
-    GROQ_MODEL                model id (default: llama-3.1-8b-instant). For a like-for-
-                              like comparison with the local deepseek-r1:14b reasoning
-                              model, use a Groq reasoning model: qwen/qwen3-32b.
+    GROQ_MODEL                model id (default: llama-3.1-8b-instant).
+                              On the free tier (6 000 tokens/request), use a strong
+                              non-reasoning model: llama-3.3-70b-versatile. A reasoning
+                              model (qwen/qwen3-32b) matches the local deepseek-r1:14b
+                              more closely, but its thinking tokens plus a full page
+                              prompt overflow the 6 000-token per-request cap (413) —
+                              reasoning models need a paid Groq tier.
 
 Groq rate limits: the free tier shares a ~6 000 tokens-per-minute sliding window
 across all requests. The GroqAdapter already retries 429s (max_retries=3, honours

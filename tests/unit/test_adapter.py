@@ -556,6 +556,25 @@ async def test_groq_json_validate_failed_gives_actionable_budget_error(monkeypat
     assert "secret page content" not in msg    # provider body is never leaked
 
 
+async def test_groq_413_too_large_gives_actionable_per_request_limit_error(monkeypatch):
+    """A Groq 413 (prompt + max_completion_tokens over the account's per-request token
+    ceiling) maps to a named AdapterOutputError that explains the cap and the levers —
+    not the opaque generic message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(model="qwen/qwen3-32b")
+
+    class _TooLarge(Exception):
+        status_code = 413
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_TooLarge("413"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "413" in msg
+    assert "max_completion_tokens" in msg
+
+
 async def test_groq_api_error_message_does_not_contain_key(monkeypatch):
     """API key must not appear in AdapterOutputError message — see spec §6.5, §18."""
     secret_key = "gsk_super_secret_12345"
