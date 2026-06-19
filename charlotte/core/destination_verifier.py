@@ -245,6 +245,16 @@ class DefaultDestinationVerifier:
         self._threshold = verify_threshold
         self._fetch_content = fetch_result_content
         self._max_bytes = max_result_bytes
+        # Fail fast on an unusable result_to_file: this is a configuration error and
+        # must surface before any network I/O, not mid-crawl after a fetch. Creating
+        # the directory here also makes the later write a no-op on the happy path.
+        if result_to_file is not None:
+            try:
+                result_to_file.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise CharlotteConfigError(
+                    f"result_to_file is not a usable directory: {result_to_file!r}: {exc}"
+                ) from exc
         self._result_to_file = result_to_file
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout

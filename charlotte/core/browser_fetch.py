@@ -261,6 +261,10 @@ class _PlaywrightFetchMixin:
         but ~2 s slower per page due to Chromium startup cost).
         Waits for networkidle so SPA content is fully rendered before capture.
         """
+        # SSRF check before navigation — parity with the httpx and document paths,
+        # which validate before any network activity. page.goto() follows redirects
+        # internally, so we cannot vet each hop here; final_url is re-checked below.
+        validate_url_safety(url)
         start = time.monotonic()
         try:
             if self._browser is not None:
@@ -292,6 +296,10 @@ class _PlaywrightFetchMixin:
                 f"Playwright error fetching {url!r}: {type(exc).__name__}: {exc}"
             ) from exc
 
+        # Post-navigation SSRF re-check: page.goto() may have redirected to a
+        # private address internally. Refuse to return its body even though the
+        # navigation already happened — this blocks data exfiltration via redirect.
+        validate_url_safety(final_url)
         # Post-navigation domain and loop checks — mirrors the httpx redirect policy.
         if not self._is_allowed(final_url):
             raise CharlotteRedirectError(
