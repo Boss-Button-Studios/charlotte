@@ -249,7 +249,10 @@ class PageFetcher:
                 # bot-detection headers checks without page rendering.
                 try:
                     return await asyncio.wait_for(
-                        self._fetch_document_with_playwright(url, visited_urls=visited_urls),
+                        self._fetch_document_with_playwright(
+                            url, visited_urls=visited_urls,
+                            robots_handler=robots_handler, default_delay=default_delay,
+                        ),
                         timeout=_total_pw_timeout,
                     )
                 except asyncio.TimeoutError:
@@ -385,7 +388,9 @@ class PageFetcher:
                     ) from exc
 
     async def _fetch_document_with_playwright(
-        self, url: str, *, visited_urls: set[str]
+        self, url: str, *, visited_urls: set[str],
+        robots_handler: "RobotsHandler | None" = None,
+        default_delay: float = 0.0,
     ) -> FetchResult:
         """Fetch a binary document using Playwright's APIRequestContext.
 
@@ -433,7 +438,15 @@ class PageFetcher:
                     if 300 <= resp.status < 400:
                         location = resp.headers.get("location", "")
                         if location:
-                            current = urljoin(current, location)
+                            destination = urljoin(current, location)
+                            # Cross-host robots check — permissions don't inherit
+                            # across domains (spec §11.1); mirrors the httpx path.
+                            if (
+                                robots_handler is not None
+                                and self._hostname(destination) != self._hostname(current)
+                            ):
+                                await robots_handler.check(destination, default_delay)
+                            current = destination
                             continue
                     body = await resp.body()
                     return resp.status, resp.url, body
@@ -467,6 +480,7 @@ class PageFetcher:
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
             CharlotteSSRFError,
+            RobotsError,
         ):
             raise
         except Exception as exc:
@@ -621,6 +635,7 @@ class PageFetcher:
             CharlotteResponseTooLargeError,
             CharlotteChallengeError,
             CharlotteSSRFError,
+            RobotsError,
         ):
             raise
         except Exception as exc:

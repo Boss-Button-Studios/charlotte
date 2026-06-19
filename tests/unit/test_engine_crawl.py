@@ -2258,3 +2258,15 @@ def test_build_binary_result_result_to_file_sanitizes_traversal(tmp_path):
     # Whatever the last path segment, the write stays inside tmp_path.
     assert content.file_path is not None
     assert content.file_path.parent == tmp_path
+
+
+def test_build_binary_result_result_to_file_write_failure_raises_config_error(tmp_path):
+    """A write failure (result_to_file points at a file, not a dir) must surface as
+    a named CharlotteConfigError, never a raw OSError (CR PR #47, the Law)."""
+    blocked = tmp_path / "not_a_dir"
+    blocked.write_text("i am a file, mkdir over me fails")
+    ctx = _goal_ctx("Find the latest calendar PDF")
+    with pytest.raises(CharlotteConfigError):
+        _build_binary_result(
+            "http://cdn.example.net/Cal.pdf", b"%PDF-1.4 x", ctx, result_to_file=blocked,
+        )

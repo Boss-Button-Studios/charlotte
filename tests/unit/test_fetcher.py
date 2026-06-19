@@ -728,3 +728,7 @@ async def test_document_playwright_blocks_redirect_to_private_ip():
     # 302s to a loopback document. The second hop must be rejected.
     with pytest.raises(CharlotteSSRFError):
         await fetcher.fetch("http://93.184.216.34/calendar.pdf", visited_urls=set())
+
+    # Validation happened BEFORE the redirect was followed: only the public URL was
+    # ever requested; the loopback hop was rejected, never fetched.
+    assert ctx.request.get.await_count == 1
