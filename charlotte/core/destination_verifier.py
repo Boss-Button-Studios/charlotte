@@ -32,7 +32,12 @@ from bs4 import BeautifulSoup
 from charlotte.config import CharlotteConfig
 from charlotte.core.normalizer import validate_url_safety
 from charlotte.core.text_normalization import tokenize
-from charlotte.exceptions import CharlotteNetworkError, CharlotteResponseTooLargeError, CharlotteTimeoutError
+from charlotte.exceptions import (
+    CharlotteConfigError,
+    CharlotteNetworkError,
+    CharlotteResponseTooLargeError,
+    CharlotteTimeoutError,
+)
 from charlotte.models import ResultContent, VerificationResult
 
 if TYPE_CHECKING:
@@ -460,7 +465,16 @@ class DefaultDestinationVerifier:
             raw_name = Path(suggested_filename or "result").name
             filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
             file_path = self._result_to_file / filename
-            file_path.write_bytes(body)
+            try:
+                self._result_to_file.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(body)
+            except OSError as exc:
+                # result_to_file is caller-supplied; a missing/unwritable directory is
+                # a configuration problem. Re-raise as a named Charlotte error (never a
+                # raw OSError) per the trust/exception model.
+                raise CharlotteConfigError(
+                    f"Could not write result to {self._result_to_file!r}: {exc}"
+                ) from exc
             content = None
 
         return ResultContent(

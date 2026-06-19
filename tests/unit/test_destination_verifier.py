@@ -603,3 +603,21 @@ async def test_non_document_link_html_response_passes_relevance():
     v = _verifier()
     result, _ = await v(url=_URL, goal_context=_ctx(goal_type="navigation"))
     assert result.passed is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_result_to_file_write_failure_raises_config_error(tmp_path):
+    """A write failure (result_to_file points at a file, not a dir) surfaces as a
+    named CharlotteConfigError, never a raw OSError — consistent with
+    _build_binary_result and the 'named exceptions only' rule."""
+    from charlotte.exceptions import CharlotteConfigError
+    blocked = tmp_path / "not_a_dir"
+    blocked.write_text("i am a file")
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(200, content=b"%PDF-1.4 x",
+                                    headers={"content-type": "application/pdf"})
+    )
+    v = _verifier(mode="existence", result_to_file=blocked)
+    with pytest.raises(CharlotteConfigError):
+        await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))

@@ -2,8 +2,8 @@
 
 **Repo:** Boss-Button-Studios/charlotte
 **Package:** charlotte-crawler
-**Spec:** See `docs/charlotte-spec-v1.4.md` for the full technical specification.
-**Tasks:** See `docs/charlotte-tasks.md` for the current task list.
+**Spec:** See `docs/charlotte-spec-v2.0.2.md` for the full technical specification (current; supersedes v1.4 and the v2.0/v2.0.1 drafts, kept as historical reference).
+**Tasks:** See `docs/charlotte-tasks.md` (the v1.4 task decomposition, complete as of v1.0.0; historical).
 
 Charlotte is a goal-directed web navigation agent. She navigates websites purposefully to find specific information, using an LLM to evaluate pages and rank links at each step. She is a library, not a service.
 
