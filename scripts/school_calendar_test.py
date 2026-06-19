@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -71,7 +72,9 @@ CHROMIUM_EXECUTABLE: str | None = None  # use Playwright's downloaded Chromium
 
 OUT_DIR = Path("crawl_logs") / "school_calendars"
 CONFIDENCE_THRESHOLD = 0.70
-INTER_TRIAL_DELAY = 3.0
+# Seconds to wait between trials. Raise it (e.g. 30) to stay under Groq's free-tier
+# 6 000 TPM window when running against a Groq model.
+INTER_TRIAL_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "3.0"))
 
 # A browser-like UA for the downstream resolver's plain-HTTP fetches. The
 # resolver is NOT Charlotte; it is the platform-transform stage that a real

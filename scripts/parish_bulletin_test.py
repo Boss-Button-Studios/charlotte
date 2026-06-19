@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +63,9 @@ CHROMIUM_EXECUTABLE: str | None = None
 
 BULLETINS_DIR = Path("crawl_logs") / "bulletins"
 CONFIDENCE_THRESHOLD = 0.70
-INTER_PARISH_DELAY = 3.0
+# Seconds to wait between parishes. Shares the CHARLOTTE_INTER_TRIAL_DELAY knob with
+# the other field scripts; raise it (e.g. 30) to respect Groq's free-tier TPM window.
+INTER_PARISH_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "3.0"))
 
 GOAL = "Find and download the latest weekly parish bulletin PDF"
 NAVIGATION_HINT = (
