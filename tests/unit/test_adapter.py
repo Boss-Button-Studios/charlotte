@@ -413,6 +413,26 @@ def test_prompt_size_params_stored(monkeypatch):
     assert adapter._max_completion_tokens == 500
 
 
+def test_completion_budget_defaults_small_for_non_reasoning_model(monkeypatch):
+    """The default (Llama, non-reasoning) keeps the tight TPM-friendly budget."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert GroqAdapter()._max_completion_tokens == 700
+
+
+def test_completion_budget_defaults_large_for_reasoning_model(monkeypatch):
+    """A reasoning model gets headroom by default — its thinking tokens count toward
+    the budget, so 700 would starve it and trigger a json_validate_failed 400."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    for model in ("qwen/qwen3-32b", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"):
+        assert GroqAdapter(model=model)._max_completion_tokens == 4096, model
+
+
+def test_explicit_completion_budget_overrides_reasoning_default(monkeypatch):
+    """An explicit max_completion_tokens always wins over the model heuristic."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert GroqAdapter(model="qwen/qwen3-32b", max_completion_tokens=900)._max_completion_tokens == 900
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — successful API call
 # ---------------------------------------------------------------------------
@@ -512,6 +532,28 @@ async def test_groq_json_decode_error_raises_adapter_output_error(monkeypatch):
     )
     with pytest.raises(AdapterOutputError, match="JSON"):
         await adapter(**_PAGE_CONTEXT)
+
+
+async def test_groq_json_validate_failed_gives_actionable_budget_error(monkeypatch):
+    """A Groq 400 with code 'json_validate_failed' (model overran the completion
+    budget mid-reasoning) maps to a named, actionable AdapterOutputError that points
+    at max_completion_tokens — not the opaque generic 'see logs' message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(model="qwen/qwen3-32b")
+
+    class _BadRequest(Exception):
+        code = "json_validate_failed"
+        # Mimic the provider body that may echo partial output — must NOT be surfaced.
+        failed_generation = "<think>secret page content..."
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_BadRequest("400"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "max_completion_tokens" in msg
+    assert "4096" in msg                       # the active budget is named
+    assert "secret page content" not in msg    # provider body is never leaked
 
 
 async def test_groq_api_error_message_does_not_contain_key(monkeypatch):

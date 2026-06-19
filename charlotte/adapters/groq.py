@@ -125,11 +125,28 @@ def _build_user_prompt(
 
 _DEFAULT_MAX_PAGE_CHARS: int = 7_000
 _DEFAULT_MAX_PROMPT_LINKS: int = 50
-# Navigation JSON responses are small; 700 output tokens is generous.
-# Groq's free tier bills input+output against a 6 000 TPM per-request budget;
-# keeping this explicit prevents the SDK from allocating ~1 200 extra tokens
-# by default, which pushes large-page requests over the limit.
+# A non-reasoning model's navigation JSON is small; 700 output tokens is generous,
+# and keeping it tight conserves Groq's 6 000 TPM free-tier budget.
 _DEFAULT_MAX_COMPLETION_TOKENS: int = 700
+# Reasoning models (qwen3, gpt-oss, deepseek-r1, …) emit a chain of *thinking*
+# tokens that count toward the completion budget before the JSON answer. 700
+# starves them: the model runs out mid-thought and Groq returns a 400 with code
+# 'json_validate_failed' ("max completion tokens reached before generating a valid
+# document"). Reasoning needs comfortable headroom — only actually-generated tokens
+# count toward TPM, so a higher ceiling costs nothing on simple pages.
+_REASONING_MAX_COMPLETION_TOKENS: int = 4_096
+# Substrings that mark a Groq model as a reasoning model. Matching by family keeps
+# this robust to point-release ids (qwen3-32b, qwen3.6-27b, gpt-oss-120b, …). An
+# explicit max_completion_tokens= always overrides this heuristic.
+_REASONING_MODEL_MARKERS: tuple[str, ...] = (
+    "qwen3", "qwq", "deepseek-r1", "gpt-oss", "reason",
+)
+
+
+def _is_reasoning_model(model_id: str) -> bool:
+    """True if the model id names a known reasoning family (emits thinking tokens)."""
+    lowered = model_id.lower()
+    return any(marker in lowered for marker in _REASONING_MODEL_MARKERS)
 
 
 class GroqAdapter:
@@ -154,7 +171,7 @@ class GroqAdapter:
         model: str = _DEFAULT_MODEL,
         max_page_chars: int = _DEFAULT_MAX_PAGE_CHARS,
         max_prompt_links: int = _DEFAULT_MAX_PROMPT_LINKS,
-        max_completion_tokens: int = _DEFAULT_MAX_COMPLETION_TOKENS,
+        max_completion_tokens: int | None = None,
     ) -> None:
         try:
             from groq import AsyncGroq
@@ -180,6 +197,15 @@ class GroqAdapter:
         self._model = model
         self._max_page_chars = max_page_chars
         self._max_prompt_links = max_prompt_links
+        # Size the completion budget to the model: reasoning models need room for
+        # their thinking tokens, non-reasoning models keep the tight TPM-friendly
+        # cap. An explicit caller value always wins over the heuristic.
+        if max_completion_tokens is None:
+            max_completion_tokens = (
+                _REASONING_MAX_COMPLETION_TOKENS
+                if _is_reasoning_model(model)
+                else _DEFAULT_MAX_COMPLETION_TOKENS
+            )
         self._max_completion_tokens = max_completion_tokens
 
     def __repr__(self) -> str:
@@ -248,6 +274,22 @@ class GroqAdapter:
         except AdapterOutputError:
             raise
         except Exception as exc:
+            # One Groq error is safe and actionable enough to name: code
+            # 'json_validate_failed' means the model exhausted the completion budget
+            # before emitting valid JSON — the usual cause is a reasoning model whose
+            # thinking tokens overran max_completion_tokens. The code string carries no
+            # secrets; the provider message (which may echo partial output) is still
+            # never surfaced. See §6.5, §18.
+            if getattr(exc, "code", None) == "json_validate_failed":
+                logger.debug(
+                    "Groq json_validate_failed at max_completion_tokens=%d",
+                    self._max_completion_tokens,
+                )
+                raise AdapterOutputError(
+                    "Groq could not produce valid JSON within max_completion_tokens="
+                    f"{self._max_completion_tokens}. A reasoning model's thinking tokens "
+                    "count toward this budget — increase max_completion_tokens."
+                ) from None
             # Suppress chain — groq SDK exceptions may contain API keys or
             # provider response bodies. Log type only, never exc_info. See §6.5, §18.
             logger.debug("Groq API call failed: %s", type(exc).__name__)
