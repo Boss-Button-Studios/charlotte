@@ -390,6 +390,64 @@ def _fresher_exploration_links(
     return out
 
 
+def _resolve_effective_result(
+    output, page, extracted, *,
+    goal_context: "GoalContext", ranked: "list[tuple[str, float]]",
+    visited: "set[str]", allowed_domains: frozenset[str],
+) -> tuple[bool, "str | None", list]:
+    """Provenance/answer-gate the model claim, then apply the temporal staleness
+    downgrade.
+
+    First runs ``_check_result`` (provenance + answer content gate). Then, for a
+    temporal "latest …" document_link goal, if the claimed result is a clearly-stale
+    dated document AND the page offers fresher goal-relevant links, downgrade the
+    claim (found=False) and return those fresher links to follow instead — the stale
+    URL is still recorded as the best-effort candidate by the caller's unfound branch.
+    Keeps the claim-path staleness policy beside the other staleness helpers.
+    """
+    effective_found, effective_result_url, effective_links = _check_result(output, page, extracted)
+    if (
+        effective_found
+        and effective_result_url is not None
+        and goal_context.reference_date is not None
+        and goal_context.goal_type == "document_link"
+        and _is_stale_dated_document(effective_result_url, goal_context.reference_date)
+    ):
+        fresher = _fresher_exploration_links(
+            ranked, stale_url=effective_result_url,
+            reference_date=goal_context.reference_date,
+            visited=visited, allowed_domains=allowed_domains,
+        )
+        if fresher:
+            logger.debug(
+                "Staleness guard: downgrading stale claim %r; exploring %d fresher link(s)",
+                effective_result_url, len(fresher),
+            )
+            return False, None, list(effective_links) + fresher
+    return effective_found, effective_result_url, effective_links
+
+
+def _page_offers_fresher_path(
+    goal_context: "GoalContext", *, ranked: "list[tuple[str, float]]",
+    visited: "set[str]", allowed_domains: frozenset[str],
+) -> bool:
+    """True if this page offers a fresher, goal-relevant link worth preferring over a
+    stale dated document (links/enqueue-path staleness gate).
+
+    Only meaningful for a temporal "latest …" document_link goal. When True, the
+    caller skips enqueuing stale dated documents from the page, so the binary
+    short-circuit can't accept an old bulletin straight off the queue (the Mary Star
+    homepage-widget case). A page with no fresher path (all-old date grid) returns
+    False, so the latest-available document is still accepted.
+    """
+    if goal_context.reference_date is None or goal_context.goal_type != "document_link":
+        return False
+    return bool(_fresher_exploration_links(
+        ranked, stale_url="", reference_date=goal_context.reference_date,
+        visited=visited, allowed_domains=allowed_domains,
+    ))
+
+
 def _build_binary_result(
     url: str,
     body: bytes,
