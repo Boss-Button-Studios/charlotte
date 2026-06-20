@@ -4,8 +4,18 @@
 
 | Version | Supported |
 |---------|-----------|
+| 1.2.x   | Yes       |
 | 1.1.x   | Yes       |
 | 1.0.x   | Yes       |
+
+> **Package version vs. spec version.** The package version
+> (`charlotte.__version__`, currently `1.2.0`) tracks the release and is what you
+> should check to know "what I installed." It is a *different* numbering scheme from
+> the technical **specification** the code implements
+> (`docs/charlotte-spec-v2.0.2.md`): the 1.2.x line ships the v2.0.2 feature set
+> (`ResultContent` / `result_to_file`, the goal preprocessor, link ranker, candidate
+> extractor, and destination verifier). A future release may align the package version
+> with the spec level; until then, map advisories by the package version above.
 
 ## Reporting a Vulnerability
 
@@ -87,6 +97,23 @@ Both adapters use `_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)
 BeautifulSoup's `find_all(True)` walk in `strip_hidden()` may recurse deeply on adversarially nested HTML. Empirical testing with 5 000-deep nesting completes in ≈0.07 s without hitting Python's default recursion limit, but the limit is not explicitly asserted or enforced.
 
 **Risk:** Low on realistic pages. Planned fix: add a test asserting 10 000-deep nesting does not blow up, or add a depth guard via `SoupStrainer`.
+
+---
+
+### S-L3 — Hidden-content sanitizer does not cover every CSS hiding technique *(Low)*
+
+`strip_hidden()` removes text hidden via the `hidden` attribute, inline styles
+(`display:none`, `visibility:hidden`, `opacity:0`, `font-size:0`, off-screen
+`position`/`text-indent`), `<script>`/`<style>`/`<noscript>` blocks, and **flat
+stylesheet rules** (`display:none` / `visibility:hidden` matched by selector before the
+`<style>` block is decomposed). It is a heuristic, not a full CSS engine. Out of scope:
+hiding rules nested in at-rules (`@media`, `@supports`), hiding applied by JavaScript at
+runtime, and exotic `clip` / `transform: scale(0)` / zero-size tricks.
+
+**Risk:** Low. The goal is to raise the bar against hidden-text prompt injection into the
+extractor/ranker, not to guarantee removal of all hidden text. Model-output provenance
+checks and the link ranker's separate scoring remain the load-bearing defenses; a
+surviving hidden string is untrusted page content, treated as such throughout.
 
 ---
 

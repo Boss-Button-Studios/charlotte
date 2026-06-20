@@ -426,3 +426,89 @@ def test_inner_charlotte_internal_error_reraises_unchanged():
         with pytest.raises(CharlotteInternalError) as exc_info:
             strip_hidden("<p>Hello</p>")
     assert exc_info.value is inner
+
+
+# ---------------------------------------------------------------------------
+# SEC-4 — broadened hidden-region coverage
+# ---------------------------------------------------------------------------
+
+def test_stylesheet_class_display_none_removes_element():
+    """The common '.hidden{display:none}' + <div class="hidden"> pattern — missed by
+    inline-style inspection because the stylesheet is decomposed before evaluation."""
+    html = (
+        "<html><head><style>.secret { display: none; }</style></head>"
+        '<body><div class="secret">Injected instruction</div><p>Visible</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Injected instruction" not in result
+    assert "Visible" in result
+
+
+def test_stylesheet_id_visibility_hidden_removes_element():
+    html = (
+        "<html><head><style>#x{visibility:hidden}</style></head>"
+        '<body><span id="x">Injected</span><p>Keep</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Injected" not in result
+    assert "Keep" in result
+
+
+def test_stylesheet_comma_selectors_removes_all():
+    html = (
+        "<html><head><style>.a, .b { display:none }</style></head>"
+        '<body><p class="a">One</p><p class="b">Two</p><p>Three</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "One" not in result and "Two" not in result
+    assert "Three" in result
+
+
+def test_noscript_content_removed():
+    result = strip_hidden("<noscript>Injected noscript text</noscript><p>Visible</p>")
+    assert "Injected noscript text" not in result
+    assert "Visible" in result
+
+
+def test_text_indent_offscreen_removes_element():
+    result = strip_hidden('<p style="text-indent:-9999px">Hidden</p><p>Visible</p>')
+    assert "Hidden" not in result
+    assert "Visible" in result
+
+
+def test_position_fixed_offscreen_removes_element():
+    result = strip_hidden('<p style="position:fixed;left:-9999px">Hidden</p><p>Visible</p>')
+    assert "Hidden" not in result
+    assert "Visible" in result
+
+
+def test_invalid_stylesheet_selector_does_not_crash():
+    """An unparseable selector must be skipped, not abort sanitization."""
+    html = (
+        "<html><head><style>>>>bad selector<<< { display:none }</style></head>"
+        "<body><p>Visible</p></body></html>"
+    )
+    result = strip_hidden(html)   # must not raise
+    assert "Visible" in result
+
+
+def test_media_query_nested_rule_does_not_over_remove():
+    """A display:none rule nested in @media must not be applied as an unconditional
+    selector — content visible outside that media query must survive (CR follow-up)."""
+    html = (
+        "<html><head><style>@media print { .x { display:none } }</style></head>"
+        '<body><p class="x">Visible on screen</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Visible on screen" in result
+
+
+def test_flat_rule_outside_at_rule_still_removed():
+    """A flat display:none rule alongside an @media block is still applied."""
+    html = (
+        "<html><head><style>@media print{.p{color:red}} .hide{display:none}</style></head>"
+        '<body><p class="hide">Gone</p><p>Stay</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Gone" not in result
+    assert "Stay" in result

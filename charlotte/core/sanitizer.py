@@ -61,11 +61,50 @@ def _is_hidden(tag) -> bool:
     # font-size:0 or 0.000... with any unit or bare — not 0.5em etc.
     if re.search(r"font-size:0(?:\.0+)?(?:[a-z%]|;|$)", style):
         return True
-    # Off-screen: position:absolute combined with left or top offset <= -1000.
-    if "position:absolute" in style and re.search(r"(?:left|top):-\d{4,}", style):
+    # Off-screen: absolute/fixed positioning combined with a large negative offset.
+    if re.search(r"position:(?:absolute|fixed)", style) and re.search(r"(?:left|top):-\d{4,}", style):
+        return True
+    # Text indented far off-screen (classic "text-indent:-9999px" image-replacement).
+    if re.search(r"text-indent:-\d{3,}", style):
         return True
 
     return False
+
+
+# Matches a flat CSS rule "selector(s) { declarations }".
+_CSS_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
+
+# Matches a whole at-rule block (e.g. @media …{ .x{display:none} }), including one level
+# of nested rules. These are stripped before flat-rule extraction so a rule that only
+# hides under a media/feature query is NOT treated as an unconditional selector — that
+# would over-remove content that is actually visible. At-rule-nested hiding is a
+# documented out-of-scope case (see strip_hidden), so dropping it here is intentional.
+_AT_RULE_BLOCK_RE = re.compile(r"@[a-zA-Z-]+[^{]*\{(?:[^{}]|\{[^{}]*\})*\}", re.DOTALL)
+
+
+def _hidden_selectors_from_styles(soup) -> list[str]:
+    """Selectors from <style> blocks whose declarations hide the matched element.
+
+    Catches the common "class hiding" pattern (e.g. ``.hidden{display:none}`` with
+    ``<div class="hidden">…</div>``) that inline-style inspection alone misses: the
+    stylesheet is decomposed before its rules can be applied, so the hidden text would
+    otherwise survive into extraction. Only flat ``display:none`` / ``visibility:hidden``
+    rules are extracted; rules nested in at-rules (``@media`` …) and JS/computed hiding
+    are out of scope.
+    """
+    selectors: list[str] = []
+    for style_tag in soup.find_all("style"):
+        # Drop at-rule blocks first so their conditionally-applied inner rules are not
+        # mistaken for unconditional flat rules.
+        css = _AT_RULE_BLOCK_RE.sub("", style_tag.get_text())
+        for raw_selector, body in _CSS_RULE_RE.findall(css):
+            declarations = re.sub(r"\s+", "", body.lower())
+            if "display:none" in declarations or "visibility:hidden" in declarations:
+                for sel in raw_selector.split(","):
+                    sel = sel.strip()
+                    if sel and not sel.startswith("@"):  # skip at-rule preludes
+                        selectors.append(sel)
+    return selectors
 
 
 def _strip_invisible(text: str) -> str:
@@ -77,17 +116,24 @@ def strip_hidden(html: str) -> str:
     """Strip hidden and invisible content from HTML per spec section 9.1.
 
     Removes:
-    - <script> and <style> tag content
+    - <script>, <style>, and <noscript> tag content
     - HTML comments
     - <meta> content attributes (invisible instruction vectors)
-    - Elements hidden via CSS (display:none, visibility:hidden, opacity:0,
-      font-size:0) or the HTML hidden attribute
-    - Off-screen positioned elements (position:absolute with left/top <= -1000px)
+    - Elements hidden via an inline style (display:none, visibility:hidden, opacity:0,
+      font-size:0, text-indent off-screen) or the HTML hidden attribute
+    - Off-screen positioned elements (position:absolute/fixed with left/top <= -1000px)
+    - Elements hidden by a flat stylesheet rule — display:none / visibility:hidden in a
+      <style> block, matched by selector before the block is decomposed
     - Zero-width and invisible Unicode characters from all text nodes
     - Non-printable control characters (preserving tab and newline)
 
     The same pass covers link anchor text, making crafted anchor text ineffective
     as a link-ranking manipulation vector.
+
+    Out of scope (a determined author can still hide text these ways; the goal is to
+    raise the bar, not to be a CSS engine): rules nested in at-rules (@media, @supports),
+    hiding applied by JavaScript at runtime, and exotic clip/transform/zero-size tricks.
+    These are documented limits, not silent gaps — see SECURITY.md.
 
     Args:
         html: Raw HTML string from the page fetcher.
@@ -98,7 +144,17 @@ def strip_hidden(html: str) -> str:
     try:
         soup = BeautifulSoup(html, "html.parser")
 
-        for tag in soup.find_all(["script", "style"]):
+        # Remove elements hidden by a stylesheet rule (class/id hiding) *before* the
+        # <style> blocks are decomposed below — otherwise the rule is gone before it
+        # can be applied and the hidden text survives into extraction.
+        for selector in _hidden_selectors_from_styles(soup):
+            try:
+                for el in soup.select(selector):
+                    el.decompose()
+            except Exception:
+                continue  # unsupported/invalid selector — never break sanitization
+
+        for tag in soup.find_all(["script", "style", "noscript"]):
             tag.decompose()
 
         for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
