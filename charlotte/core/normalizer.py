@@ -108,8 +108,11 @@ def validate_url_safety(url: str) -> None:
       or reserved IP address
     - Bare "localhost" is rejected regardless of its OS resolution
 
-    DNS rebinding is a known partial gap: this check is purely static on the URL
-    string and does not re-validate after DNS resolution. See SECURITY.md.
+    This is the static, string-level check. It does not resolve DNS, so a hostname
+    whose record points at a private address passes here — that case (and DNS
+    rebinding) is closed at connect time on the httpx fetch paths by the pinning
+    transport (charlotte.core.pinning_transport), which resolves and validates the
+    actual connection target. The render_js path is not pinned. See SECURITY.md.
 
     Args:
         url: Absolute URL to validate. Should be normalized first.

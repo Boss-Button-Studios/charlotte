@@ -26,6 +26,7 @@ import httpx
 
 from charlotte.config import HTTP_USER_AGENT
 from charlotte.core.normalizer import normalize_url, validate_url_safety
+from charlotte.core.pinning_transport import build_pinned_transport
 from charlotte.exceptions import (
     CharlotteChallengeError,
     CharlotteConfigError,
@@ -204,9 +205,13 @@ class PageFetcher(_PlaywrightFetchMixin):
             follow_redirects=False,
             timeout=timeout,
             headers={"User-Agent": self._user_agent},
+            transport=build_pinned_transport(),
         ) as client:
             while True:
-                # SSRF check before each request (also catches redirected URLs).
+                # Static SSRF check before each request (also catches redirected URLs).
+                # The pinned transport adds the connect-time check: it resolves the host
+                # and refuses any address that is not publicly routable, closing the
+                # DNS-name-to-private-IP and DNS-rebinding gaps the string check can't.
                 validate_url_safety(current_url)
                 try:
                     async with client.stream("GET", current_url) as response:
