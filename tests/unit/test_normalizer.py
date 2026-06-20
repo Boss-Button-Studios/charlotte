@@ -429,3 +429,25 @@ def test_ssrf_public_url_passes():
     validate_url_safety("http://example.com/")
     validate_url_safety("https://www.gov.uk/services")
     validate_url_safety("http://8.8.8.8/")  # Google's public DNS — is_private=False
+
+
+def test_ssrf_alternate_ip_encodings_rejected():
+    """SEC-2 regression: 127.0.0.1 is blocked, but its decimal / octal / hex encodings
+    were treated as DNS names and passed — the OS resolver maps them all to loopback.
+    They must be blocked too."""
+    for encoded in ("2130706433", "0177.0.0.1", "0x7f000001", "127.1"):
+        with pytest.raises(CharlotteSSRFError, match="non-public"):
+            validate_url_safety(f"http://{encoded}/")
+
+
+def test_ssrf_decimal_encoded_private_rejected():
+    """The decimal encoding of a private address (10.0.0.1 = 167772161) is also blocked."""
+    with pytest.raises(CharlotteSSRFError, match="non-public"):
+        validate_url_safety("http://167772161/")
+
+
+def test_ssrf_carrier_grade_nat_rejected():
+    """100.64.0.0/10 (RFC 6598 CGN) is not is_private but is not globally routable —
+    it must be blocked via the is_global allow-list."""
+    with pytest.raises(CharlotteSSRFError, match="non-public"):
+        validate_url_safety("http://100.64.0.1/")

@@ -13,6 +13,7 @@ from __future__ import annotations
 import ipaddress
 import posixpath
 import re
+import socket
 from urllib.parse import (
     parse_qsl,
     quote,
@@ -141,24 +142,56 @@ def validate_url_safety(url: str) -> None:
             "URL targets 'localhost' — Charlotte only crawls publicly routable addresses"
         )
 
-    # Try to parse as a bare IP address (works for both IPv4 and IPv6 literals).
-    # urlsplit().hostname strips brackets from IPv6 literals, giving a parseable address.
-    try:
-        addr = ipaddress.ip_address(hostname)
-    except ValueError:
+    # Parse the host as an IP literal — including the alternate encodings the OS
+    # resolver accepts (so the deny-list can't be bypassed by writing 127.0.0.1 in a
+    # different base). A genuine DNS name returns None and passes the static check.
+    addr = _parse_ip_literal(hostname)
+    if addr is None:
         return  # hostname is a DNS name — static SSRF check passes (see DNS rebinding note)
 
-    if (
-        addr.is_private
+    if _is_non_public_address(addr):
+        raise CharlotteSSRFError(
+            f"URL targets a non-public IP address ({hostname!r} -> {addr.compressed}) — "
+            "Charlotte only crawls publicly routable addresses"
+        )
+
+
+def _parse_ip_literal(hostname: str) -> ipaddress._BaseAddress | None:
+    """Return the IP address for an IP-literal host, or None for a DNS name.
+
+    Handles dotted-quad and IPv6 literals via ``ipaddress``, plus the alternate IPv4
+    encodings the OS resolver treats as numeric addresses — decimal (``2130706433``),
+    octal (``0177.0.0.1``), hex (``0x7f000001``), and short forms (``127.1``). Without
+    this, those encodings fell through as "DNS names" and bypassed the IP deny-list
+    even though they resolve to loopback/private space.
+    """
+    try:
+        return ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    # inet_aton parses exactly the legacy numeric IPv4 forms and rejects real hostnames.
+    try:
+        return ipaddress.ip_address(socket.inet_aton(hostname))
+    except (OSError, ValueError):
+        return None
+
+
+def _is_non_public_address(addr: ipaddress._BaseAddress) -> bool:
+    """True if the address is not a publicly routable destination.
+
+    ``is_global`` is the allow-list: it is False for private, loopback, link-local,
+    reserved, and carrier-grade-NAT (100.64.0.0/10) ranges that an explicit deny-list
+    is easy to leave a hole in. The extra explicit checks are belt-and-suspenders for
+    forms a given interpreter's ``is_global`` might classify differently.
+    """
+    return (
+        not addr.is_global
         or addr.is_loopback
         or addr.is_link_local
         or addr.is_multicast
         or addr.is_reserved
-    ):
-        raise CharlotteSSRFError(
-            f"URL targets a non-public IP address ({hostname!r}) — "
-            "Charlotte only crawls publicly routable addresses"
-        )
+        or addr.is_unspecified
+    )
 
 
 def normalize_url(url: str, base_url: str | None = None) -> str:
