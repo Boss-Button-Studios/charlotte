@@ -330,9 +330,23 @@ class GroqAdapter:
                     "max_completion_tokens, max_page_chars, or max_prompt_links — or "
                     "use a higher Groq tier."
                 ) from None
-            # Suppress chain — groq SDK exceptions may contain API keys or
-            # provider response bodies. Log type only, never exc_info. See §6.5, §18.
-            logger.debug("Groq API call failed: %s", type(exc).__name__)
+            # Any other failure: name the HTTP status when the SDK exposes one (status
+            # codes are not secrets), so no Groq error is ever fully opaque again — the
+            # blanket masking repeatedly fought debugging this. The provider message and
+            # body (which may echo keys or page content) are still never surfaced.
+            # See §6.5, §18.
+            status = getattr(exc, "status_code", None)
+            logger.debug("Groq API call failed: %s status=%s", type(exc).__name__, status)
+            if status == 429:
+                # The free-tier TPM wall: a bursty multi-page crawl exhausts the
+                # per-minute token window faster than the 3 retries recover, so a page
+                # gets skipped mid-trial — and if it was the answer page, the trial fails.
+                raise AdapterOutputError(
+                    "Groq rate limit hit (HTTP 429): the per-minute token window was "
+                    "exhausted and retries did not recover. Pace the crawl (fewer pages "
+                    "or longer delays) or use a higher Groq tier."
+                ) from None
+            detail = f" (HTTP {status})" if status is not None else ""
             raise AdapterOutputError(
-                "Groq API call failed — see logs for detail"
+                f"Groq API call failed{detail} — see logs for detail"
             ) from None

@@ -614,6 +614,36 @@ async def test_groq_401_gives_actionable_api_key_error(monkeypatch):
     assert "GROQ_API_KEY" in msg
 
 
+async def test_groq_429_gives_actionable_rate_limit_error(monkeypatch):
+    """A 429 (free-tier TPM window exhausted, retries spent) is named as a rate limit
+    pointing at pacing/tier — not the opaque generic message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _RateLimited(Exception):
+        status_code = 429
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_RateLimited("429"))
+    with pytest.raises(AdapterOutputError, match="rate limit"):
+        await adapter(**_PAGE_CONTEXT)
+
+
+async def test_groq_unknown_status_is_named_not_opaque(monkeypatch):
+    """Any other status (e.g. 500) is surfaced with its code, so no Groq failure is
+    ever fully opaque again — the masking that hid the 401 all session."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _ServerError(Exception):
+        status_code = 503
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_ServerError("boom"))
+    with pytest.raises(AdapterOutputError, match="HTTP 503"):
+        await adapter(**_PAGE_CONTEXT)
+
+
 async def test_groq_413_too_large_gives_actionable_per_request_limit_error(monkeypatch):
     """A Groq 413 (prompt + max_completion_tokens over the account's per-request token
     ceiling) maps to a named AdapterOutputError that explains the cap and the levers —
