@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -39,7 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 
-from adapter_factory import build_adapter
+from adapter_factory import build_adapter, env_float
 from charlotte import crawl
 from charlotte.adapters.base import AdapterProtocol
 from charlotte.models import (
@@ -61,8 +60,8 @@ from charlotte.models import (
 # Config
 # ---------------------------------------------------------------------------
 
-CONFIDENCE_THRESHOLD = float(os.environ.get("CHARLOTTE_CONFIDENCE_THRESHOLD", "0.70"))
-INTER_TRIAL_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "2.0"))
+CONFIDENCE_THRESHOLD = env_float("CHARLOTTE_CONFIDENCE_THRESHOLD", 0.70)
+INTER_TRIAL_DELAY = env_float("CHARLOTTE_INTER_TRIAL_DELAY", 2.0)
 
 SUITES_DIR = Path("crawl_logs") / "suites"
 

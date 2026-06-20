@@ -28,14 +28,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 
 import charlotte
-from adapter_factory import build_adapter
+from adapter_factory import build_adapter, env_float
 from charlotte import crawl
 from charlotte.adapters.base import AdapterProtocol
 from charlotte.core import model_metrics
@@ -65,7 +64,7 @@ BULLETINS_DIR = Path("crawl_logs") / "bulletins"
 CONFIDENCE_THRESHOLD = 0.70
 # Seconds to wait between parishes. Shares the CHARLOTTE_INTER_TRIAL_DELAY knob with
 # the other field scripts; raise it (e.g. 30) to respect Groq's free-tier TPM window.
-INTER_PARISH_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "3.0"))
+INTER_PARISH_DELAY = env_float("CHARLOTTE_INTER_TRIAL_DELAY", 3.0)
 
 GOAL = "Find and download the latest weekly parish bulletin PDF"
 NAVIGATION_HINT = (

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,7 +45,7 @@ import httpx
 
 import charlotte
 from charlotte import crawl
-from adapter_factory import build_adapter
+from adapter_factory import build_adapter, env_float
 from charlotte.adapters.base import AdapterProtocol
 from charlotte.core import model_metrics
 from charlotte.core.normalizer import validate_url_safety
@@ -74,7 +73,7 @@ OUT_DIR = Path("crawl_logs") / "school_calendars"
 CONFIDENCE_THRESHOLD = 0.70
 # Seconds to wait between trials. Raise it (e.g. 30) to stay under Groq's free-tier
 # 6 000 TPM window when running against a Groq model.
-INTER_TRIAL_DELAY = float(os.environ.get("CHARLOTTE_INTER_TRIAL_DELAY", "3.0"))
+INTER_TRIAL_DELAY = env_float("CHARLOTTE_INTER_TRIAL_DELAY", 3.0)
 
 # A browser-like UA for the downstream resolver's plain-HTTP fetches. The
 # resolver is NOT Charlotte; it is the platform-transform stage that a real

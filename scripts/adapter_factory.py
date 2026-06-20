@@ -52,9 +52,32 @@ import os
 import sys
 from pathlib import Path
 
+from charlotte.exceptions import CharlotteConfigError
+
 # Default Groq model. Kept here (not imported from the adapter) so the suite log
 # header can record the exact id that will be used even before the adapter is built.
 _GROQ_DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+
+def env_float(name: str, default: float | None) -> float | None:
+    """Read a float from the environment, rejecting malformed input cleanly.
+
+    Operator-set env vars are untrusted input: a bare ``float(os.environ[...])``
+    crashes with a raw ValueError on something like "ten". Return the default when
+    the var is unset or blank, and raise a named CharlotteConfigError (never a raw
+    ValueError) with the offending value when it cannot be parsed, so misconfiguration
+    fails fast with a clear message. Shared by the field scripts for their numeric
+    knobs (timeouts, inter-trial delays).
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise CharlotteConfigError(
+            f"{name} must be a number, got {raw!r}."
+        ) from exc
 
 # Project root holds an optional .env (gitignored) with GROQ_API_KEY / GROQ_MODEL.
 # adapter_factory.py lives in scripts/, so the root is its parent's parent.
@@ -110,8 +133,7 @@ def _build_local() -> tuple[object, str]:
     """
     from charlotte.adapters.local import LocalAdapter
 
-    timeout_env = os.environ.get("CHARLOTTE_MODEL_TIMEOUT")
-    timeout = float(timeout_env) if timeout_env else None
+    timeout = env_float("CHARLOTTE_MODEL_TIMEOUT", None)
     verbose = os.environ.get("CHARLOTTE_MODEL_VERBOSE", "").strip().lower() == "true"
 
     adapter = LocalAdapter(timeout=timeout, verbose=verbose)
@@ -143,10 +165,9 @@ def build_adapter() -> tuple[object, str]:
         short "provider:model" label for the run header and summary metadata.
 
     Raises:
-        ValueError: CHARLOTTE_ADAPTER is set to an unknown provider. Listing the
-            valid choices is friendlier than a later, more cryptic failure.
-        CharlotteConfigError: the chosen provider is misconfigured (e.g. Groq
-            without an API key) — raised by the adapter itself.
+        CharlotteConfigError: CHARLOTTE_ADAPTER names an unknown provider (the message
+            lists the valid choices), or the chosen provider is misconfigured (e.g.
+            Groq without an API key — raised by the adapter itself).
     """
     # Treat the input as untrusted: normalise case/whitespace, default to local.
     provider = os.environ.get("CHARLOTTE_ADAPTER", "local").strip().lower() or "local"
@@ -156,6 +177,6 @@ def build_adapter() -> tuple[object, str]:
     if provider == "groq":
         return _build_groq()
 
-    raise ValueError(
+    raise CharlotteConfigError(
         f"Unknown CHARLOTTE_ADAPTER={provider!r}. Use 'local' (Ollama) or 'groq'."
     )
