@@ -24,7 +24,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -36,6 +36,7 @@ from charlotte.exceptions import (
     CharlotteConfigError,
     CharlotteNetworkError,
     CharlotteResponseTooLargeError,
+    CharlotteSSRFError,
     CharlotteTimeoutError,
 )
 from charlotte.models import ResultContent, VerificationResult
@@ -286,6 +287,14 @@ class DefaultDestinationVerifier:
 
         try:
             fetch = await self._fetch(url)
+        except CharlotteSSRFError as exc:
+            # A redirect hop targeted private/metadata space. Treat it exactly like an
+            # unsafe initial URL: fail verification and return no content, so the
+            # internal bytes never reach the caller.
+            return (
+                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason=f"unsafe_url: {exc}"),
+                None,
+            )
         except CharlotteResponseTooLargeError:
             return (
                 VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="response_too_large"),
@@ -396,9 +405,17 @@ class DefaultDestinationVerifier:
             (status_code, redirect_history, content_type, etag, suggested_filename,
              html_str, body_bytes)
 
+        Redirects are followed manually (httpx auto-redirects are disabled) so that
+        validate_url_safety runs on every hop — a candidate result URL is attacker-
+        influenceable (extracted from an untrusted page) and a public host can 302 into
+        private/metadata space. This mirrors the main page fetcher's redirect policy;
+        without it, the verifier would fetch the internal address and hand its bytes back
+        to the caller (SSRF + exfiltration).
+
         Raises:
             CharlotteResponseTooLargeError: body exceeded max_result_bytes.
-            CharlotteNetworkError: network-level failures.
+            CharlotteSSRFError: the URL or any redirect hop targets a non-public address.
+            CharlotteNetworkError: network-level failures or a redirect loop / overflow.
             CharlotteTimeoutError: connect or read timeout.
         """
         timeout = httpx.Timeout(
@@ -408,51 +425,75 @@ class DefaultDestinationVerifier:
             pool=10.0,
         )
         headers = {"User-Agent": self._user_agent}
-        chunks: list[bytes] = []
-        total = 0
+        redirect_history: list[httpx.Response] = []
+        # Raw (un-normalized) URLs already requested — for redirect-loop detection.
+        chain_seen: set[str] = {url}
+        current_url = url
 
-        try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                max_redirects=_MAX_REDIRECTS,
-                timeout=timeout,
-                headers=headers,
-            ) as client:
-                async with client.stream("GET", url) as resp:
-                    async for chunk in resp.aiter_bytes(chunk_size=65_536):
-                        total += len(chunk)
-                        if total > self._max_bytes:
-                            raise CharlotteResponseTooLargeError(
-                                f"Response from {url} exceeded {self._max_bytes} bytes"
-                            )
-                        chunks.append(chunk)
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=timeout,
+            headers=headers,
+        ) as client:
+            while True:
+                # SSRF guard on every hop, before any connection is made.
+                validate_url_safety(current_url)
+                try:
+                    async with client.stream("GET", current_url) as resp:
+                        if resp.is_redirect:
+                            destination = urljoin(current_url, resp.headers.get("location", ""))
+                            redirect_history.append(resp)
+                            if len(redirect_history) > _MAX_REDIRECTS:
+                                raise CharlotteNetworkError(
+                                    f"Too many redirects fetching {url}"
+                                )
+                            if destination in chain_seen:
+                                raise CharlotteNetworkError(
+                                    f"Redirect loop fetching {url}"
+                                )
+                            chain_seen.add(destination)
+                            current_url = destination
+                            continue  # re-validate the destination at the top of the loop
 
-                    body = b"".join(chunks)
-                    status = resp.status_code
-                    redirect_history = list(resp.history)
-                    content_type = resp.headers.get("content-type")
-                    etag = resp.headers.get("etag")
-                    cd = resp.headers.get("content-disposition", "")
-                    suggested_filename = self._extract_filename(cd, url)
+                        chunks: list[bytes] = []
+                        total = 0
+                        async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                            total += len(chunk)
+                            if total > self._max_bytes:
+                                raise CharlotteResponseTooLargeError(
+                                    f"Response from {current_url} exceeded {self._max_bytes} bytes"
+                                )
+                            chunks.append(chunk)
 
-        except CharlotteResponseTooLargeError:
-            raise
-        except httpx.TooManyRedirects as exc:
-            raise CharlotteNetworkError(f"Too many redirects fetching {url}") from exc
-        except httpx.TimeoutException as exc:
-            raise CharlotteTimeoutError(f"Timeout fetching {url}") from exc
-        except httpx.RequestError as exc:
-            raise CharlotteNetworkError(f"Network error fetching {url}") from exc
+                        body = b"".join(chunks)
+                        status = resp.status_code
+                        content_type = resp.headers.get("content-type")
+                        etag = resp.headers.get("etag")
+                        cd = resp.headers.get("content-disposition", "")
+                        suggested_filename = self._extract_filename(cd, current_url)
 
-        # Decode as text only for HTML responses; binary files stay bytes-only.
-        html_str = ""
-        if content_type and "html" in content_type:
-            try:
-                html_str = body.decode(resp.encoding or "utf-8", errors="replace")
-            except Exception:
-                html_str = body.decode("utf-8", errors="replace")
+                        # Decode as text only for HTML; binary files stay bytes-only.
+                        html_str = ""
+                        if content_type and "html" in content_type:
+                            try:
+                                html_str = body.decode(resp.encoding or "utf-8", errors="replace")
+                            except Exception:
+                                html_str = body.decode("utf-8", errors="replace")
 
-        return status, redirect_history, content_type, etag, suggested_filename, html_str, body
+                        return (
+                            status, redirect_history, content_type, etag,
+                            suggested_filename, html_str, body,
+                        )
+                except (
+                    CharlotteResponseTooLargeError,
+                    CharlotteSSRFError,
+                    CharlotteNetworkError,
+                ):
+                    raise
+                except httpx.TimeoutException as exc:
+                    raise CharlotteTimeoutError(f"Timeout fetching {url}") from exc
+                except httpx.RequestError as exc:
+                    raise CharlotteNetworkError(f"Network error fetching {url}") from exc
 
     @staticmethod
     def _extract_filename(content_disposition: str, url: str) -> str | None:

@@ -263,6 +263,41 @@ async def test_existence_empty_body_fails():
     assert result.reason == "empty_response"
 
 
+@pytest.mark.asyncio
+async def test_verifier_refuses_redirect_into_metadata_space(respx_mock):
+    """SEC-1 regression: a candidate result URL (from an untrusted page) that redirects
+    to a private/metadata address must NOT be followed, and its bytes must never reach
+    the caller. validate_url_safety is re-applied on every redirect hop, so the internal
+    endpoint is never fetched and no content is returned."""
+    respx_mock.assert_all_called = False
+    public = "http://public.example/doc"
+    internal = "http://169.254.169.254/latest/meta-data/"
+    respx_mock.get(public).mock(return_value=httpx.Response(302, headers={"Location": internal}))
+    # If the fix regresses and the redirect is followed, this would serve the secret.
+    internal_route = respx_mock.get(internal).mock(
+        return_value=httpx.Response(200, content=b"AWS_SECRET_ACCESS_KEY=leaked")
+    )
+    v = _verifier(mode="existence")
+    result, content = await v(url=public, goal_context=_ctx(goal_type="document_link"))
+    assert result.passed is False
+    assert "unsafe" in result.reason
+    assert content is None
+    assert not internal_route.called, "verifier fetched the internal redirect target"
+
+
+@pytest.mark.asyncio
+async def test_verifier_follows_safe_public_redirect(respx_mock):
+    """The manual redirect loop still follows a legitimate public→public redirect and
+    verifies the final response — the SEC-1 fix blocks unsafe hops, not all redirects."""
+    start = "http://example.com/old"
+    final = "http://example.com/new"
+    respx_mock.get(start).mock(return_value=httpx.Response(301, headers={"Location": final}))
+    respx_mock.get(final).mock(return_value=httpx.Response(200, content=_RELEVANT_HTML))
+    v = _verifier(mode="existence")
+    result, _ = await v(url=start, goal_context=_ctx())
+    assert result.passed is True
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_existence_login_wall_form_fails():
