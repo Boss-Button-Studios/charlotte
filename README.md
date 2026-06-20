@@ -99,15 +99,22 @@ An adapter is any async callable with the signature below. Charlotte ships two.
 
 ### GroqAdapter
 
-Calls **Llama 3.1 8B Instruct** via the [Groq API](https://console.groq.com). Fast, accurate, and free to start. Requires the `[groq]` extra and a `GROQ_API_KEY` environment variable.
+Calls the [Groq API](https://console.groq.com) — fast, accurate, and free to start. Requires the `[groq]` extra and a `GROQ_API_KEY` environment variable. Defaults to **Llama 3.1 8B Instruct**.
 
 ```python
 from charlotte.adapters.groq import GroqAdapter
 
-model = GroqAdapter()                           # reads GROQ_API_KEY from env
-model = GroqAdapter(api_key="gsk_…")           # or pass directly
-model = GroqAdapter(model="llama-3.3-70b-versatile")  # override model
+model = GroqAdapter()                                 # llama-3.1-8b-instant, reads GROQ_API_KEY
+model = GroqAdapter(api_key="gsk_…")                 # or pass the key directly
+model = GroqAdapter(model="llama-3.3-70b-versatile")  # a stronger non-reasoning model
+model = GroqAdapter(model="qwen/qwen3-32b")           # a reasoning model (see below)
 ```
+
+**Reasoning models** (e.g. `qwen/qwen3-32b`, `openai/gpt-oss-*`) are recognised by name and given a larger completion budget automatically — their "thinking" tokens count against the response, so the non-reasoning default would starve them and fail.
+
+**Prompt size** is bounded by `max_page_chars` (default 4500) and `max_prompt_links` (default 25); `max_completion_tokens` is sized per model (700 non-reasoning, 4096 reasoning). The defaults keep a single request under Groq's per-request token ceiling. On the **free tier** the per-minute and per-request token limits are tight — reasoning models and multi-page JS-rendered crawls can exhaust them; a paid (Dev) tier removes those walls.
+
+**Failures** raise a named `AdapterOutputError` that identifies the cause — expired/invalid key (401), oversized request (413), rate limit (429), or another HTTP status — never an opaque error. The Groq response body (which may contain keys or page content) is never surfaced.
 
 ### LocalAdapter
 
@@ -318,7 +325,7 @@ All Charlotte exceptions inherit from `CharlotteError`. Third-party exceptions (
 | `CharlotteTimeoutError` | Connect, read, render, or model timeout |
 | `CharlotteRedirectError` | Cross-domain redirect to a disallowed host |
 | `RobotsError` | robots.txt blocks a URL or cannot be fetched |
-| `AdapterOutputError` | Model returned malformed JSON or failed schema validation after retry |
+| `AdapterOutputError` | Model returned malformed JSON / failed schema validation after retry, or the model provider's API call failed (auth, rate limit, oversized request, …) |
 | `CharlotteInternalError` | Unexpected engine-level state (should not occur; file a bug) |
 
 `CharlotteConfigError` is raised eagerly — before any network I/O — when configuration is invalid. All others surface as `PageSkipped` events (stream mode) or as logged debug entries in the `visit_log` (non-stream mode). `crawl()` and `find_link()` never raise after the crawl has started.
@@ -327,7 +334,7 @@ All Charlotte exceptions inherit from `CharlotteError`. Third-party exceptions (
 
 ## Specification
 
-The full technical specification — adapter authoring guide, streaming events reference, security model, URL normalization rules — is at `docs/charlotte-spec-v1.4.md`.
+The full technical specification — adapter authoring guide, streaming events reference, security model, URL normalization rules — is at `docs/charlotte-spec-v2.0.2.md` (current; the v1.4 and v2.0/v2.0.1 documents are kept as historical reference).
 
 ---
 
