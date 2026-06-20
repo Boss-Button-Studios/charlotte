@@ -16,7 +16,11 @@ through here so the safety logic lives in exactly one place.
 
 from __future__ import annotations
 
+import os
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import urlsplit
 
 from charlotte.exceptions import CharlotteConfigError
@@ -60,6 +64,70 @@ def safe_result_basename(suggested_filename: str | None, url: str) -> str:
     return "result"
 
 
+def _candidate_names(base: str) -> Iterator[str]:
+    """Yield the base name, then ``stem (2).ext``, ``stem (3).ext``, … for collisions."""
+    yield base
+    stem, suffix = Path(base).stem, Path(base).suffix
+    for n in range(2, _MAX_DISAMBIGUATION + 1):
+        yield f"{stem} ({n}){suffix}"
+
+
+def open_temp_result_file(directory: Path) -> tuple[Path, BinaryIO]:
+    """Create a temp file inside ``directory`` and return ``(path, open binary handle)``.
+
+    Used to stream a verification fetch to disk before the candidate has passed: the
+    bytes land in a ``.part`` temp file in the *destination* directory (so the later
+    commit is an atomic same-filesystem link), and the caller deletes it if verification
+    fails — content for a rejected candidate is never committed (spec §7.7.5).
+
+    Raises CharlotteConfigError if the directory is missing/unwritable.
+    """
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=directory, prefix=".charlotte-", suffix=".part")
+    except OSError as exc:
+        raise CharlotteConfigError(
+            f"Could not write result to {directory!r}: {exc}"
+        ) from exc
+    return Path(name), os.fdopen(fd, "wb")
+
+
+def commit_temp_result(
+    temp_path: Path,
+    directory: Path,
+    suggested_filename: str | None,
+    url: str,
+) -> Path:
+    """Promote a streamed temp file to its final, guaranteed-unique result name.
+
+    Uses ``os.link`` (atomic, fails if the target exists) to claim a unique name, then
+    removes the temp file — same no-overwrite guarantee as write_result_file. The temp
+    file is always removed, even on failure, so nothing is left behind.
+
+    Raises CharlotteConfigError if no unique name can be claimed or the link fails.
+    """
+    base = safe_result_basename(suggested_filename, url)
+    try:
+        for candidate in _candidate_names(base):
+            final = directory / candidate
+            try:
+                os.link(temp_path, final)
+                return final
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise CharlotteConfigError(
+                    f"Could not write result to {directory!r}: {exc}"
+                ) from exc
+        raise CharlotteConfigError(
+            f"Could not allocate a unique result filename in {directory!r} "
+            f"after {_MAX_DISAMBIGUATION} attempts"
+        )
+    finally:
+        # The committed result is a separate hard link; drop the temp name regardless.
+        temp_path.unlink(missing_ok=True)
+
+
 def write_result_file(
     directory: Path,
     body: bytes,
@@ -80,7 +148,6 @@ def write_result_file(
             surface as a named Charlotte error.
     """
     base = safe_result_basename(suggested_filename, url)
-    stem, suffix = Path(base).stem, Path(base).suffix
 
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -89,8 +156,7 @@ def write_result_file(
             f"Could not write result to {directory!r}: {exc}"
         ) from exc
 
-    for attempt in range(_MAX_DISAMBIGUATION):
-        candidate = base if attempt == 0 else f"{stem} ({attempt + 1}){suffix}"
+    for candidate in _candidate_names(base):
         path = directory / candidate
         try:
             # "xb" → open for exclusive creation; fails if the path already exists.

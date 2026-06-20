@@ -518,6 +518,83 @@ async def test_result_to_file_writes_bytes(tmp_path):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_streamed_result_is_written_and_buffer_free(tmp_path):
+    """FUN-1: a binary document delivered to result_to_file is streamed to disk — the
+    file holds the bytes and ResultContent.content is None (not double-buffered)."""
+    body = b"%PDF-1.4 " + b"A" * 50_000
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(200, content=body,
+                                    headers={"content-type": "application/pdf"})
+    )
+    v = _verifier(mode="existence", result_to_file=tmp_path)
+    _, content = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+    assert content.content is None
+    assert content.content_length == len(body)
+    assert content.file_path.read_bytes() == body
+    # Only the committed result remains — no leftover .part temp file.
+    assert [p.name for p in tmp_path.iterdir()] == [content.file_path.name]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_streamed_empty_response_leaves_no_file(tmp_path):
+    """§7.7.5: a streamed candidate that fails verification (empty body) leaves nothing
+    on disk — the temp file is deleted, not committed."""
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(200, content=b"",
+                                    headers={"content-type": "application/pdf"})
+    )
+    v = _verifier(mode="existence", result_to_file=tmp_path)
+    result, content = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+    assert result.passed is False
+    assert content is None
+    assert list(tmp_path.iterdir()) == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_streamed_login_wall_redirect_leaves_no_file(tmp_path):
+    """§7.7.5 on the streamed path: the binary final response is streamed, but the
+    login-wall redirect fails verification — the file must be suppressed."""
+    # The chain passes through a /login hop (a redirect source), then lands on a binary
+    # that the verifier streams — and must still suppress because of the login wall.
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(302, headers={"Location": "http://example.com/login"})
+    )
+    respx.get("http://example.com/login").mock(
+        return_value=httpx.Response(302, headers={"Location": "http://example.com/file.pdf"})
+    )
+    respx.get("http://example.com/file.pdf").mock(
+        return_value=httpx.Response(200, content=b"%PDF data",
+                                    headers={"content-type": "application/pdf"})
+    )
+    v = _verifier(mode="existence", result_to_file=tmp_path)
+    result, content = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+    assert result.passed is False
+    assert result.reason == "login_wall_redirect"
+    assert content is None
+    assert list(tmp_path.iterdir()) == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_streamed_oversize_response_leaves_no_partial_file(tmp_path):
+    """A body exceeding max_result_bytes during streaming is rejected and the partial
+    temp file is removed — no truncated artifact is left behind."""
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(200, content=b"x" * 5_000,
+                                    headers={"content-type": "application/pdf"})
+    )
+    v = _verifier(mode="existence", result_to_file=tmp_path, max_result_bytes=1_000)
+    result, content = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+    assert result.passed is False
+    assert result.reason == "response_too_large"
+    assert content is None
+    assert list(tmp_path.iterdir()) == []
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_result_to_file_does_not_overwrite_across_recrawls(tmp_path):
     """SEC-3 end-to-end: two verifications of a document with the same server filename
     must accumulate as distinct files, not clobber each other."""
