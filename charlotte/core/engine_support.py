@@ -468,7 +468,6 @@ def _build_binary_result(
     their file (spec §7.7).
     """
     from datetime import datetime, timezone
-    from pathlib import Path
     from urllib.parse import urlsplit
 
     from charlotte.models import ResultContent, VerificationResult
@@ -496,21 +495,11 @@ def _build_binary_result(
     file_path: "Path | None" = None
     out_content: "bytes | None" = body
     if result_to_file is not None:
-        # Sanitize to basename — URL paths are attacker-controlled; strip parent
-        # components to prevent traversal. Mirrors DefaultDestinationVerifier.
-        raw_name = Path(suggested_filename or "result").name
-        filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
-        file_path = result_to_file / filename
-        try:
-            result_to_file.mkdir(parents=True, exist_ok=True)
-            file_path.write_bytes(body)
-        except OSError as exc:
-            # result_to_file is caller-supplied; a missing/unwritable directory is a
-            # configuration problem. Re-raise as a named Charlotte error (never a raw
-            # OSError) per the trust/exception model.
-            raise CharlotteConfigError(
-                f"Could not write result to {result_to_file!r}: {exc}"
-            ) from exc
+        # Write to a guaranteed-unique path (never overwriting a sibling); shared with
+        # DefaultDestinationVerifier so the safe-filename logic lives in one place.
+        from charlotte.core.result_writer import write_result_file
+
+        file_path = write_result_file(result_to_file, body, suggested_filename, url)
         out_content = None
 
     content = ResultContent(

@@ -518,6 +518,35 @@ async def test_result_to_file_writes_bytes(tmp_path):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_result_to_file_does_not_overwrite_across_recrawls(tmp_path):
+    """SEC-3 end-to-end: two verifications of a document with the same server filename
+    must accumulate as distinct files, not clobber each other."""
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(
+            200, content=b"older",
+            headers={"content-type": "application/pdf",
+                     "content-disposition": 'attachment; filename="bulletin.pdf"'},
+        )
+    )
+    v = _verifier(mode="existence", result_to_file=tmp_path)
+    _, first = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+
+    respx.get(_DOC_URL).mock(
+        return_value=httpx.Response(
+            200, content=b"newer",
+            headers={"content-type": "application/pdf",
+                     "content-disposition": 'attachment; filename="bulletin.pdf"'},
+        )
+    )
+    _, second = await v(url=_DOC_URL, goal_context=_ctx(goal_type="document_link"))
+
+    assert first.file_path != second.file_path
+    assert first.file_path.read_bytes() == b"older"   # original preserved
+    assert second.file_path.read_bytes() == b"newer"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_result_to_file_uses_suggested_filename(tmp_path):
     respx.get(_DOC_URL).mock(
         return_value=httpx.Response(

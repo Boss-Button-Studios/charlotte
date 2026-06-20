@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.normalizer import validate_url_safety
+from charlotte.core.result_writer import write_result_file
 from charlotte.core.text_normalization import tokenize
 from charlotte.exceptions import (
     CharlotteConfigError,
@@ -332,7 +333,7 @@ class DefaultDestinationVerifier:
 
         if self._mode == "existence":
             result = VerificationResult(url=url, passed=True, mode="existence", score=None, reason="ok_existence")
-            content = self._build_content(body, content_type, etag, suggested_filename) if capture else None
+            content = self._build_content(body, content_type, etag, suggested_filename, url) if capture else None
             return result, content
 
         # document_link goals require a binary file — reject HTML pages outright.
@@ -348,7 +349,7 @@ class DefaultDestinationVerifier:
         # PDFs, ZIPs, and other binary files have no extractable text for BM25/embeddings.
         if not html:
             result = VerificationResult(url=url, passed=True, mode=self._mode, score=None, reason="ok_existence_binary")
-            content = self._build_content(body, content_type, etag, suggested_filename) if capture else None
+            content = self._build_content(body, content_type, etag, suggested_filename, url) if capture else None
             return result, content
 
         # --- Relevance / full scoring ---
@@ -366,7 +367,7 @@ class DefaultDestinationVerifier:
         passed = score >= threshold
         reason = "ok_relevance" if passed else f"score_below_threshold:{score:.3f}"
         result = VerificationResult(url=url, passed=passed, mode=self._mode, score=score, reason=reason)
-        content = self._build_content(body, content_type, etag, suggested_filename) if (capture and passed) else None
+        content = self._build_content(body, content_type, etag, suggested_filename, url) if (capture and passed) else None
         return result, content
 
     # ------------------------------------------------------------------
@@ -505,27 +506,19 @@ class DefaultDestinationVerifier:
         content_type: str | None,
         etag: str | None,
         suggested_filename: str | None,
+        url: str,
     ) -> ResultContent:
-        """Wrap buffered bytes in a ResultContent, optionally writing to disk."""
+        """Wrap buffered bytes in a ResultContent, optionally writing to disk.
+
+        When result_to_file is set, the bytes are written to a guaranteed-unique path
+        (never overwriting a sibling) and ResultContent.content is None — see §7.7.4
+        and charlotte.core.result_writer.
+        """
         file_path: Path | None = None
         content: bytes | None = body
 
         if self._result_to_file is not None:
-            # Sanitize to basename — Content-Disposition and URL paths are
-            # attacker-controlled; strip parent components to prevent traversal.
-            raw_name = Path(suggested_filename or "result").name
-            filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
-            file_path = self._result_to_file / filename
-            try:
-                self._result_to_file.mkdir(parents=True, exist_ok=True)
-                file_path.write_bytes(body)
-            except OSError as exc:
-                # result_to_file is caller-supplied; a missing/unwritable directory is
-                # a configuration problem. Re-raise as a named Charlotte error (never a
-                # raw OSError) per the trust/exception model.
-                raise CharlotteConfigError(
-                    f"Could not write result to {self._result_to_file!r}: {exc}"
-                ) from exc
+            file_path = write_result_file(self._result_to_file, body, suggested_filename, url)
             content = None
 
         return ResultContent(
