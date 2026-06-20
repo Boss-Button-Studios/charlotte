@@ -301,6 +301,18 @@ class GroqAdapter:
                     f"{self._max_completion_tokens}. A reasoning model's thinking tokens "
                     "count toward this budget — increase max_completion_tokens."
                 ) from None
+            # A 401 means the key was rejected (expired, revoked, or wrong). Status
+            # code carries no secret. This was invisible for an entire debugging
+            # session because it masked as a generic failure — name it. The common
+            # trap: a stale GROQ_API_KEY exported in the shell overrides the fresh one
+            # in .env (the .env loader respects an already-set env value).
+            if getattr(exc, "status_code", None) == 401:
+                logger.debug("Groq 401 authentication failure")
+                raise AdapterOutputError(
+                    "Groq rejected the API key (HTTP 401) — it is expired, revoked, or "
+                    "wrong. Check GROQ_API_KEY. Note: a value exported in your shell "
+                    "(e.g. from ~/.bashrc) overrides the key in .env."
+                ) from None
             # A 413 means prompt_tokens + max_completion_tokens exceeded the account's
             # per-request token ceiling (Groq's free tier caps a single request at its
             # 6 000 TPM limit). Status code carries no secrets. This is the wall a

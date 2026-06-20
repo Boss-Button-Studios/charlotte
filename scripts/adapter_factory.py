@@ -49,6 +49,7 @@ against Groq, raise the script's inter-trial pause — e.g. CHARLOTTE_INTER_TRIA
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # Default Groq model. Kept here (not imported from the adapter) so the suite log
@@ -84,8 +85,20 @@ def _load_dotenv_for_groq() -> None:
         name = name.strip()
         # Strip surrounding quotes a user may have added; keep the value otherwise intact.
         value = value.strip().strip('"').strip("'")
-        if name and name not in os.environ:
+        if not name:
+            continue
+        if name not in os.environ:
             os.environ[name] = value
+        elif os.environ[name] != value:
+            # The environment already has a *different* value, which wins. For the API
+            # key this is a silent footgun: a stale GROQ_API_KEY exported from ~/.bashrc
+            # shadows the fresh one in .env, and every call then 401s. Warn loudly (no
+            # secret printed) instead of letting it pass unnoticed.
+            print(
+                f"WARNING: {name} is set in your shell and differs from .env — the "
+                f"shell value is being used. `unset {name}` to use .env instead.",
+                file=sys.stderr,
+            )
 
 
 def _build_local() -> tuple[object, str]:

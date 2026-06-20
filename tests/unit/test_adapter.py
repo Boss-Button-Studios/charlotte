@@ -596,6 +596,24 @@ async def test_groq_json_validate_failed_gives_actionable_budget_error(monkeypat
     assert "secret page content" not in msg    # provider body is never leaked
 
 
+async def test_groq_401_gives_actionable_api_key_error(monkeypatch):
+    """A Groq 401 (expired/wrong key) maps to a named AdapterOutputError that points at
+    GROQ_API_KEY — not the opaque generic message that hid this for a whole session."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _Unauthorized(Exception):
+        status_code = 401
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_Unauthorized("401"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "401" in msg
+    assert "GROQ_API_KEY" in msg
+
+
 async def test_groq_413_too_large_gives_actionable_per_request_limit_error(monkeypatch):
     """A Groq 413 (prompt + max_completion_tokens over the account's per-request token
     ceiling) maps to a named AdapterOutputError that explains the cap and the levers —
