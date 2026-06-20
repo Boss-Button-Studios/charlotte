@@ -90,6 +90,23 @@ BeautifulSoup's `find_all(True)` walk in `strip_hidden()` may recurse deeply on 
 
 ---
 
+### S-L3 — Hidden-content sanitizer does not cover every CSS hiding technique *(Low)*
+
+`strip_hidden()` removes text hidden via the `hidden` attribute, inline styles
+(`display:none`, `visibility:hidden`, `opacity:0`, `font-size:0`, off-screen
+`position`/`text-indent`), `<script>`/`<style>`/`<noscript>` blocks, and **flat
+stylesheet rules** (`display:none` / `visibility:hidden` matched by selector before the
+`<style>` block is decomposed). It is a heuristic, not a full CSS engine. Out of scope:
+hiding rules nested in at-rules (`@media`, `@supports`), hiding applied by JavaScript at
+runtime, and exotic `clip` / `transform: scale(0)` / zero-size tricks.
+
+**Risk:** Low. The goal is to raise the bar against hidden-text prompt injection into the
+extractor/ranker, not to guarantee removal of all hidden text. Model-output provenance
+checks and the link ranker's separate scoring remain the load-bearing defenses; a
+surviving hidden string is untrusted page content, treated as such throughout.
+
+---
+
 ### DNS Rebinding *(partial mitigation)*
 
 `validate_url_safety()` performs static checks on the URL string before DNS resolution.
