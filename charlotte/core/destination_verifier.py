@@ -21,6 +21,7 @@ other goal types require fetch_result_content=True.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
@@ -31,6 +32,11 @@ from bs4 import BeautifulSoup
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.normalizer import validate_url_safety
+from charlotte.core.result_writer import (
+    commit_temp_result,
+    open_temp_result_file,
+    write_result_file,
+)
 from charlotte.core.text_normalization import tokenize
 from charlotte.exceptions import (
     CharlotteConfigError,
@@ -180,6 +186,30 @@ def _embedding_score(
 
 
 # ---------------------------------------------------------------------------
+# Internal fetch result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _VerifierFetch:
+    """Outcome of the verification fetch, ready for scoring and delivery.
+
+    ``body`` holds the buffered bytes for the in-memory path; when the response was
+    streamed straight to disk (large binary + result_to_file), ``body`` is empty,
+    ``streamed_path`` points at the uncommitted temp file, and ``content_length`` still
+    reports the true size. ``html`` is the decoded text for HTML responses only.
+    """
+    status: int
+    redirect_history: list[httpx.Response]
+    content_type: str | None
+    etag: str | None
+    suggested_filename: str | None
+    html: str
+    body: bytes
+    content_length: int
+    streamed_path: Path | None
+
+
+# ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
 
@@ -286,7 +316,7 @@ class DefaultDestinationVerifier:
             )
 
         try:
-            fetch = await self._fetch(url)
+            fetch = await self._fetch(url, capture=capture)
         except CharlotteSSRFError as exc:
             # A redirect hop targeted private/metadata space. Treat it exactly like an
             # unsafe initial URL: fail verification and return no content, so the
@@ -306,68 +336,76 @@ class DefaultDestinationVerifier:
                 None,
             )
 
-        status, redirect_history, content_type, etag, suggested_filename, html, body = fetch
+        # A streamed binary result is sitting in an uncommitted temp file. It is
+        # committed to its final name only when verification passes and delivery is
+        # wanted (see _deliver); the finally clause deletes it on every other path, so a
+        # rejected candidate never leaves bytes behind (§7.7.5).
+        streamed_path = fetch.streamed_path
+        try:
+            html = fetch.html
 
-        # --- Existence checks (all non-off modes) ---
-        if not (200 <= status < 300):
-            return (
-                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason=f"http_{status}"),
-                None,
-            )
-        if _is_login_wall_redirect(redirect_history):
-            return (
-                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="login_wall_redirect"),
-                None,
-            )
-        if html and _has_password_form(html):
-            return (
-                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="login_wall_form"),
-                None,
-            )
-        if not body:
-            return (
-                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="empty_response"),
-                None,
-            )
+            # --- Existence checks (all non-off modes) ---
+            if not (200 <= fetch.status < 300):
+                return (
+                    VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason=f"http_{fetch.status}"),
+                    None,
+                )
+            if _is_login_wall_redirect(fetch.redirect_history):
+                return (
+                    VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="login_wall_redirect"),
+                    None,
+                )
+            if html and _has_password_form(html):
+                return (
+                    VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="login_wall_form"),
+                    None,
+                )
+            if fetch.content_length == 0:
+                return (
+                    VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="empty_response"),
+                    None,
+                )
 
-        if self._mode == "existence":
-            result = VerificationResult(url=url, passed=True, mode="existence", score=None, reason="ok_existence")
-            content = self._build_content(body, content_type, etag, suggested_filename) if capture else None
-            return result, content
+            if self._mode == "existence":
+                result = VerificationResult(url=url, passed=True, mode="existence", score=None, reason="ok_existence")
+                return result, (self._deliver(fetch, url) if capture else None)
 
-        # document_link goals require a binary file — reject HTML pages outright.
-        # An HTML result_url means the model stopped at a listing page rather than
-        # the document itself; forcing a fail here sends Charlotte back to navigate.
-        if goal_context.goal_type == "document_link" and html:
-            return (
-                VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="html_not_document"),
-                None,
-            )
+            # document_link goals require a binary file — reject HTML pages outright.
+            # An HTML result_url means the model stopped at a listing page rather than
+            # the document itself; forcing a fail here sends Charlotte back to navigate.
+            if goal_context.goal_type == "document_link" and html:
+                return (
+                    VerificationResult(url=url, passed=False, mode=self._mode, score=None, reason="html_not_document"),
+                    None,
+                )
 
-        # Binary (non-HTML) responses cannot be relevance-scored; fall back to existence.
-        # PDFs, ZIPs, and other binary files have no extractable text for BM25/embeddings.
-        if not html:
-            result = VerificationResult(url=url, passed=True, mode=self._mode, score=None, reason="ok_existence_binary")
-            content = self._build_content(body, content_type, etag, suggested_filename) if capture else None
-            return result, content
+            # Binary (non-HTML) responses cannot be relevance-scored; fall back to existence.
+            # PDFs, ZIPs, and other binary files have no extractable text for BM25/embeddings.
+            if not html:
+                result = VerificationResult(url=url, passed=True, mode=self._mode, score=None, reason="ok_existence_binary")
+                return result, (self._deliver(fetch, url) if capture else None)
 
-        # --- Relevance / full scoring ---
-        text = _page_text(html) if html else ""
-        synonym_values: list[str] = [v for vs in goal_context.synonyms.values() for v in vs]
-        threshold = self._threshold
+            # --- Relevance / full scoring ---
+            text = _page_text(html) if html else ""
+            synonym_values: list[str] = [v for vs in goal_context.synonyms.values() for v in vs]
+            threshold = self._threshold
 
-        if self._mode == "full":
-            score, used_embeddings = self._full_mode_score(text, goal_context.anchor_terms, synonym_values)
-            if not used_embeddings:
-                threshold = min(1.0, threshold + 0.15)
-        else:
-            score = _bm25_score(text, goal_context.anchor_terms, synonym_values)
+            if self._mode == "full":
+                score, used_embeddings = self._full_mode_score(text, goal_context.anchor_terms, synonym_values)
+                if not used_embeddings:
+                    threshold = min(1.0, threshold + 0.15)
+            else:
+                score = _bm25_score(text, goal_context.anchor_terms, synonym_values)
 
-        passed = score >= threshold
-        reason = "ok_relevance" if passed else f"score_below_threshold:{score:.3f}"
-        result = VerificationResult(url=url, passed=passed, mode=self._mode, score=score, reason=reason)
-        content = self._build_content(body, content_type, etag, suggested_filename) if (capture and passed) else None
-        return result, content
+            passed = score >= threshold
+            reason = "ok_relevance" if passed else f"score_below_threshold:{score:.3f}"
+            result = VerificationResult(url=url, passed=passed, mode=self._mode, score=score, reason=reason)
+            return result, (self._deliver(fetch, url) if (capture and passed) else None)
+        finally:
+            # Commit (via _deliver) hard-links the temp to its final name and removes the
+            # temp, so this is a no-op on success and a cleanup on every rejection path.
+            if streamed_path is not None:
+                streamed_path.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -395,15 +433,15 @@ class DefaultDestinationVerifier:
         except ImportError:
             return _bm25_score(text, anchor_terms, synonym_values), False
 
-    async def _fetch(
-        self,
-        url: str,
-    ) -> tuple[int, list[httpx.Response], str | None, str | None, str | None, str, bytes]:
+    async def _fetch(self, url: str, *, capture: bool) -> _VerifierFetch:
         """Fetch url and return components needed for verification and content delivery.
 
-        Returns:
-            (status_code, redirect_history, content_type, etag, suggested_filename,
-             html_str, body_bytes)
+        When ``capture`` is set and ``result_to_file`` is configured, a 2xx *binary*
+        response is streamed straight to a temp file instead of buffered in RAM, so a
+        large document never has to fit in memory (spec §7.7.4). HTML is always buffered
+        (needed for relevance scoring, and small), and an error (non-2xx) body is
+        buffered so the verifier can reject it without leaving a file behind. The temp
+        file is the caller's to commit (on pass) or delete (on fail) — see __call__.
 
         Redirects are followed manually (httpx auto-redirects are disabled) so that
         validate_url_safety runs on every hop — a candidate result URL is attacker-
@@ -455,6 +493,49 @@ class DefaultDestinationVerifier:
                             current_url = destination
                             continue  # re-validate the destination at the top of the loop
 
+                        status = resp.status_code
+                        content_type = resp.headers.get("content-type")
+                        etag = resp.headers.get("etag")
+                        cd = resp.headers.get("content-disposition", "")
+                        suggested_filename = self._extract_filename(cd, current_url)
+                        is_html = bool(content_type and "html" in content_type)
+                        meta = dict(
+                            status=status, redirect_history=redirect_history,
+                            content_type=content_type, etag=etag,
+                            suggested_filename=suggested_filename,
+                        )
+
+                        # Stream a deliverable binary result straight to disk — no full
+                        # body in RAM. Only on 2xx (an error body is buffered for
+                        # rejection) and only for non-HTML (HTML is scored from text).
+                        if (
+                            capture
+                            and self._result_to_file is not None
+                            and 200 <= status < 300
+                            and not is_html
+                        ):
+                            temp_path, handle = open_temp_result_file(self._result_to_file)
+                            size = 0
+                            try:
+                                async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                                    size += len(chunk)
+                                    if size > self._max_bytes:
+                                        raise CharlotteResponseTooLargeError(
+                                            f"Response from {current_url} exceeded "
+                                            f"{self._max_bytes} bytes"
+                                        )
+                                    handle.write(chunk)
+                            except BaseException:
+                                handle.close()
+                                temp_path.unlink(missing_ok=True)
+                                raise
+                            handle.close()
+                            return _VerifierFetch(
+                                **meta, html="", body=b"",
+                                content_length=size, streamed_path=temp_path,
+                            )
+
+                        # Buffered path: HTML, or no file delivery requested.
                         chunks: list[bytes] = []
                         total = 0
                         async for chunk in resp.aiter_bytes(chunk_size=65_536):
@@ -466,23 +547,16 @@ class DefaultDestinationVerifier:
                             chunks.append(chunk)
 
                         body = b"".join(chunks)
-                        status = resp.status_code
-                        content_type = resp.headers.get("content-type")
-                        etag = resp.headers.get("etag")
-                        cd = resp.headers.get("content-disposition", "")
-                        suggested_filename = self._extract_filename(cd, current_url)
-
-                        # Decode as text only for HTML; binary files stay bytes-only.
                         html_str = ""
-                        if content_type and "html" in content_type:
+                        if is_html:
                             try:
                                 html_str = body.decode(resp.encoding or "utf-8", errors="replace")
                             except Exception:
                                 html_str = body.decode("utf-8", errors="replace")
 
-                        return (
-                            status, redirect_history, content_type, etag,
-                            suggested_filename, html_str, body,
+                        return _VerifierFetch(
+                            **meta, html=html_str, body=body,
+                            content_length=len(body), streamed_path=None,
                         )
                 except (
                     CharlotteResponseTooLargeError,
@@ -499,33 +573,50 @@ class DefaultDestinationVerifier:
     def _extract_filename(content_disposition: str, url: str) -> str | None:
         return _extract_filename(content_disposition, url)
 
+    def _deliver(self, fetch: _VerifierFetch, url: str) -> ResultContent:
+        """Build the ResultContent for a passing candidate.
+
+        A streamed binary result is committed to its final unique name (no second copy
+        in memory); a buffered result is written to disk or returned in memory by
+        _build_content.
+        """
+        if fetch.streamed_path is not None:
+            assert self._result_to_file is not None  # streaming only happens when set
+            file_path = commit_temp_result(
+                fetch.streamed_path, self._result_to_file, fetch.suggested_filename, url
+            )
+            return ResultContent(
+                content=None,
+                content_type=fetch.content_type,
+                content_length=fetch.content_length,
+                suggested_filename=fetch.suggested_filename,
+                etag=fetch.etag,
+                fetched_at=datetime.now(timezone.utc),
+                file_path=file_path,
+            )
+        return self._build_content(
+            fetch.body, fetch.content_type, fetch.etag, fetch.suggested_filename, url
+        )
+
     def _build_content(
         self,
         body: bytes,
         content_type: str | None,
         etag: str | None,
         suggested_filename: str | None,
+        url: str,
     ) -> ResultContent:
-        """Wrap buffered bytes in a ResultContent, optionally writing to disk."""
+        """Wrap buffered bytes in a ResultContent, optionally writing to disk.
+
+        When result_to_file is set, the bytes are written to a guaranteed-unique path
+        (never overwriting a sibling) and ResultContent.content is None — see §7.7.4
+        and charlotte.core.result_writer.
+        """
         file_path: Path | None = None
         content: bytes | None = body
 
         if self._result_to_file is not None:
-            # Sanitize to basename — Content-Disposition and URL paths are
-            # attacker-controlled; strip parent components to prevent traversal.
-            raw_name = Path(suggested_filename or "result").name
-            filename = raw_name if raw_name and not raw_name.startswith(".") else "result"
-            file_path = self._result_to_file / filename
-            try:
-                self._result_to_file.mkdir(parents=True, exist_ok=True)
-                file_path.write_bytes(body)
-            except OSError as exc:
-                # result_to_file is caller-supplied; a missing/unwritable directory is
-                # a configuration problem. Re-raise as a named Charlotte error (never a
-                # raw OSError) per the trust/exception model.
-                raise CharlotteConfigError(
-                    f"Could not write result to {self._result_to_file!r}: {exc}"
-                ) from exc
+            file_path = write_result_file(self._result_to_file, body, suggested_filename, url)
             content = None
 
         return ResultContent(
