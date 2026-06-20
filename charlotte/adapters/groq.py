@@ -123,13 +123,39 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
-_DEFAULT_MAX_PAGE_CHARS: int = 7_000
-_DEFAULT_MAX_PROMPT_LINKS: int = 50
-# Navigation JSON responses are small; 700 output tokens is generous.
-# Groq's free tier bills input+output against a 6 000 TPM per-request budget;
-# keeping this explicit prevents the SDK from allocating ~1 200 extra tokens
-# by default, which pushes large-page requests over the limit.
+# Prompt-size caps. These bound a single request's input tokens, which matters
+# acutely on Groq's free tier: a request is rejected with HTTP 413 once its
+# input + max_completion_tokens approaches the per-request token ceiling (a tight
+# few thousand tokens, and per-model). The link list is the worst offender — 50
+# long URLs (calendar cids, CDN paths) on a JS-rendered page pushed prompts past
+# ~16 000 chars (~5 000 tokens) and 413'd on the first call. The link ranker orders
+# links best-first, so the top 25 keep the navigable ones; 4 500 page chars keep
+# the summary useful. Together they hold a worst-case prompt near ~12 000 chars,
+# well under the ceiling, turning hard 413s into at-worst retryable 429 throttling.
+_DEFAULT_MAX_PAGE_CHARS: int = 4_500
+_DEFAULT_MAX_PROMPT_LINKS: int = 25
+# A non-reasoning model's navigation JSON is small; 700 output tokens is generous,
+# and keeping it tight conserves Groq's 6 000 TPM free-tier budget.
 _DEFAULT_MAX_COMPLETION_TOKENS: int = 700
+# Reasoning models (qwen3, gpt-oss, deepseek-r1, …) emit a chain of *thinking*
+# tokens that count toward the completion budget before the JSON answer. 700
+# starves them: the model runs out mid-thought and Groq returns a 400 with code
+# 'json_validate_failed' ("max completion tokens reached before generating a valid
+# document"). Reasoning needs comfortable headroom — only actually-generated tokens
+# count toward TPM, so a higher ceiling costs nothing on simple pages.
+_REASONING_MAX_COMPLETION_TOKENS: int = 4_096
+# Substrings that mark a Groq model as a reasoning model. Matching by family keeps
+# this robust to point-release ids (qwen3-32b, qwen3.6-27b, gpt-oss-120b, …). An
+# explicit max_completion_tokens= always overrides this heuristic.
+_REASONING_MODEL_MARKERS: tuple[str, ...] = (
+    "qwen3", "qwq", "deepseek-r1", "gpt-oss", "reason",
+)
+
+
+def _is_reasoning_model(model_id: str) -> bool:
+    """True if the model id names a known reasoning family (emits thinking tokens)."""
+    lowered = model_id.lower()
+    return any(marker in lowered for marker in _REASONING_MODEL_MARKERS)
 
 
 class GroqAdapter:
@@ -141,11 +167,13 @@ class GroqAdapter:
     raised. See spec §6.3.
 
     ``max_page_chars`` and ``max_prompt_links`` trim the page content and link
-    list before serialising the prompt. Groq's free tier allows 6 000 tokens
-    per minute (sliding window) shared across all requests; the defaults keep
-    each prompt under ~3 500 tokens. Back-to-back model calls on a multi-page
-    crawl will exhaust this budget and trigger 429 rate limits — up to 3 retries
-    are attempted before raising. Upgrade to a Dev-tier key for higher limits.
+    list before serialising the prompt. Groq's free tier enforces a tight, per-model
+    tokens-per-minute limit and rejects any single request whose input plus
+    completion budget exceeds the per-request ceiling (HTTP 413). The defaults hold a
+    worst-case prompt near ~12 000 chars (~4 000 tokens) so a single request stays
+    under that ceiling; back-to-back calls on a multi-page crawl can still exhaust the
+    minute window and trigger 429s — up to 3 retries are attempted before raising.
+    Upgrade to a Dev-tier key for higher limits.
     """
 
     def __init__(
@@ -154,7 +182,7 @@ class GroqAdapter:
         model: str = _DEFAULT_MODEL,
         max_page_chars: int = _DEFAULT_MAX_PAGE_CHARS,
         max_prompt_links: int = _DEFAULT_MAX_PROMPT_LINKS,
-        max_completion_tokens: int = _DEFAULT_MAX_COMPLETION_TOKENS,
+        max_completion_tokens: int | None = None,
     ) -> None:
         try:
             from groq import AsyncGroq
@@ -180,6 +208,15 @@ class GroqAdapter:
         self._model = model
         self._max_page_chars = max_page_chars
         self._max_prompt_links = max_prompt_links
+        # Size the completion budget to the model: reasoning models need room for
+        # their thinking tokens, non-reasoning models keep the tight TPM-friendly
+        # cap. An explicit caller value always wins over the heuristic.
+        if max_completion_tokens is None:
+            max_completion_tokens = (
+                _REASONING_MAX_COMPLETION_TOKENS
+                if _is_reasoning_model(model)
+                else _DEFAULT_MAX_COMPLETION_TOKENS
+            )
         self._max_completion_tokens = max_completion_tokens
 
     def __repr__(self) -> str:
@@ -248,9 +285,68 @@ class GroqAdapter:
         except AdapterOutputError:
             raise
         except Exception as exc:
-            # Suppress chain — groq SDK exceptions may contain API keys or
-            # provider response bodies. Log type only, never exc_info. See §6.5, §18.
-            logger.debug("Groq API call failed: %s", type(exc).__name__)
+            # One Groq error is safe and actionable enough to name: code
+            # 'json_validate_failed' means the model exhausted the completion budget
+            # before emitting valid JSON — the usual cause is a reasoning model whose
+            # thinking tokens overran max_completion_tokens. The code string carries no
+            # secrets; the provider message (which may echo partial output) is still
+            # never surfaced. See §6.5, §18.
+            if getattr(exc, "code", None) == "json_validate_failed":
+                logger.debug(
+                    "Groq json_validate_failed at max_completion_tokens=%d",
+                    self._max_completion_tokens,
+                )
+                raise AdapterOutputError(
+                    "Groq could not produce valid JSON within max_completion_tokens="
+                    f"{self._max_completion_tokens}. A reasoning model's thinking tokens "
+                    "count toward this budget — increase max_completion_tokens."
+                ) from None
+            # A 401 means the key was rejected (expired, revoked, or wrong). Status
+            # code carries no secret. This was invisible for an entire debugging
+            # session because it masked as a generic failure — name it. The common
+            # trap: a stale GROQ_API_KEY exported in the shell overrides the fresh one
+            # in .env (the .env loader respects an already-set env value).
+            if getattr(exc, "status_code", None) == 401:
+                logger.debug("Groq 401 authentication failure")
+                raise AdapterOutputError(
+                    "Groq rejected the API key (HTTP 401) — it is expired, revoked, or "
+                    "wrong. Check GROQ_API_KEY. Note: a value exported in your shell "
+                    "(e.g. from ~/.bashrc) overrides the key in .env."
+                ) from None
+            # A 413 means prompt_tokens + max_completion_tokens exceeded the account's
+            # per-request token ceiling (Groq's free tier caps a single request at its
+            # 6 000 TPM limit). Status code carries no secrets. This is the wall a
+            # reasoning model hits on the free tier: its large budget plus a full page
+            # prompt overflows 6 000. Name the fix instead of "see logs".
+            if getattr(exc, "status_code", None) == 413:
+                logger.debug(
+                    "Groq 413 request too large at max_completion_tokens=%d",
+                    self._max_completion_tokens,
+                )
+                raise AdapterOutputError(
+                    "Groq rejected the request as too large (413): the prompt plus "
+                    f"max_completion_tokens={self._max_completion_tokens} exceeds the "
+                    "account's per-request token limit (free tier: 6 000). Reduce "
+                    "max_completion_tokens, max_page_chars, or max_prompt_links — or "
+                    "use a higher Groq tier."
+                ) from None
+            # Any other failure: name the HTTP status when the SDK exposes one (status
+            # codes are not secrets), so no Groq error is ever fully opaque again — the
+            # blanket masking repeatedly fought debugging this. The provider message and
+            # body (which may echo keys or page content) are still never surfaced.
+            # See §6.5, §18.
+            status = getattr(exc, "status_code", None)
+            logger.debug("Groq API call failed: %s status=%s", type(exc).__name__, status)
+            if status == 429:
+                # The free-tier TPM wall: a bursty multi-page crawl exhausts the
+                # per-minute token window faster than the 3 retries recover, so a page
+                # gets skipped mid-trial — and if it was the answer page, the trial fails.
+                raise AdapterOutputError(
+                    "Groq rate limit hit (HTTP 429): the per-minute token window was "
+                    "exhausted and retries did not recover. Pace the crawl (fewer pages "
+                    "or longer delays) or use a higher Groq tier."
+                ) from None
+            detail = f" (HTTP {status})" if status is not None else ""
             raise AdapterOutputError(
-                "Groq API call failed — see logs for detail"
+                f"Groq API call failed{detail} — see logs for detail"
             ) from None

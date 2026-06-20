@@ -34,13 +34,10 @@ from pathlib import Path
 from time import monotonic
 
 import charlotte
+from adapter_factory import build_adapter, env_float
 from charlotte import crawl
-from charlotte.adapters.local import LocalAdapter
+from charlotte.adapters.base import AdapterProtocol
 from charlotte.core import model_metrics
-
-# Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
-# The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
-CHROMIUM_EXECUTABLE: str | None = None
 from charlotte.models import (
     BudgetExhausted,
     CrawlComplete,
@@ -55,13 +52,19 @@ from charlotte.models import (
     ResultFound,
 )
 
+# Playwright's downloaded Chromium binary is used directly (chromium_executable=None).
+# The binary lives in ~/.cache/ms-playwright/ after `playwright install chromium`.
+CHROMIUM_EXECUTABLE: str | None = None
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 BULLETINS_DIR = Path("crawl_logs") / "bulletins"
 CONFIDENCE_THRESHOLD = 0.70
-INTER_PARISH_DELAY = 3.0
+# Seconds to wait between parishes. Shares the CHARLOTTE_INTER_TRIAL_DELAY knob with
+# the other field scripts; raise it (e.g. 30) to respect Groq's free-tier TPM window.
+INTER_PARISH_DELAY = env_float("CHARLOTTE_INTER_TRIAL_DELAY", 3.0)
 
 GOAL = "Find and download the latest weekly parish bulletin PDF"
 NAVIGATION_HINT = (
@@ -176,7 +179,7 @@ class ParishResult:
 # ---------------------------------------------------------------------------
 
 async def run_parish(
-    parish: dict, run_dir: Path, adapter: LocalAdapter,
+    parish: dict, run_dir: Path, adapter: AdapterProtocol,
 ) -> ParishResult:
     result = ParishResult(name=parish["name"], slug=parish["slug"], url=parish["url"])
     parish_dir = run_dir / parish["slug"]
@@ -347,10 +350,11 @@ async def main() -> None:
     run_dir = BULLETINS_DIR / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    adapter = LocalAdapter()
+    adapter, adapter_label = build_adapter()
 
     print(f"\nCharlotte {charlotte.__version__}  —  parish bulletin retrieval")
     print(f"run dir : {run_dir}")
+    print(f"model   : {adapter_label}")
     print(f"goal    : {GOAL}")
 
     results: list[ParishResult] = []
@@ -364,6 +368,7 @@ async def main() -> None:
     summary = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "charlotte_version": charlotte.__version__,
+        "model": adapter_label,
         "goal": GOAL,
         "found": sum(1 for r in results if r.found),
         "total": len(results),

@@ -413,6 +413,66 @@ def test_prompt_size_params_stored(monkeypatch):
     assert adapter._max_completion_tokens == 500
 
 
+def test_completion_budget_defaults_small_for_non_reasoning_model(monkeypatch):
+    """The default (Llama, non-reasoning) keeps the tight TPM-friendly budget."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert GroqAdapter()._max_completion_tokens == 700
+
+
+def test_completion_budget_defaults_large_for_reasoning_model(monkeypatch):
+    """A reasoning model gets headroom by default — its thinking tokens count toward
+    the budget, so 700 would starve it and trigger a json_validate_failed 400."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    for model in ("qwen/qwen3-32b", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"):
+        assert GroqAdapter(model=model)._max_completion_tokens == 4096, model
+
+
+def test_explicit_completion_budget_overrides_reasoning_default(monkeypatch):
+    """An explicit max_completion_tokens always wins over the model heuristic."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert GroqAdapter(model="qwen/qwen3-32b", max_completion_tokens=900)._max_completion_tokens == 900
+
+
+def test_default_prompt_caps_are_free_tier_safe(monkeypatch):
+    """Value lock: the default prompt caps are load-bearing for free-tier safety. A
+    JS-rendered page's body + long-URL links must not push a single request past Groq's
+    per-request token ceiling (HTTP 413, which the SDK does not retry — every render_js
+    trial failed on the first call when these were 7 000/50). Do not raise these without
+    re-checking the 413 boundary against a real rendered page."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+    assert adapter._max_page_chars == 4_500
+    assert adapter._max_prompt_links == 25
+
+
+async def test_oversized_page_and_links_are_trimmed_before_send(monkeypatch):
+    """Mechanism: regardless of how large the page or link list is, the adapter trims
+    to its caps before serialising — page content to max_page_chars, links to
+    max_prompt_links — so the request size is bounded by config, not by the page."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()  # defaults: 4500 page chars, 25 links
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(
+        return_value=_make_groq_response(json.dumps(_VALID_NOT_FOUND))
+    )
+    marker = "UNIQUEWORD"
+    pathological = dict(
+        _PAGE_CONTEXT,
+        page_summary=("x" * 100_000) + marker,                    # marker past the cap
+        available_links=[
+            {"text": f"Calendar widget {i}", "url": f"https://calendar.google.com/c/{i}"}
+            for i in range(200)
+        ],
+    )
+    await adapter(**pathological)
+    user_msg = adapter._client.chat.completions.create.call_args[1]["messages"][1]["content"]
+    # Page content was truncated to the cap: the trailing marker never made it in.
+    assert marker not in user_msg
+    # Links were capped at 25: link #24 is present, link #25 (the 26th) is not.
+    assert "Calendar widget 24" in user_msg
+    assert "Calendar widget 25" not in user_msg
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter — successful API call
 # ---------------------------------------------------------------------------
@@ -512,6 +572,95 @@ async def test_groq_json_decode_error_raises_adapter_output_error(monkeypatch):
     )
     with pytest.raises(AdapterOutputError, match="JSON"):
         await adapter(**_PAGE_CONTEXT)
+
+
+async def test_groq_json_validate_failed_gives_actionable_budget_error(monkeypatch):
+    """A Groq 400 with code 'json_validate_failed' (model overran the completion
+    budget mid-reasoning) maps to a named, actionable AdapterOutputError that points
+    at max_completion_tokens — not the opaque generic 'see logs' message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(model="qwen/qwen3-32b")
+
+    class _BadRequest(Exception):
+        code = "json_validate_failed"
+        # Mimic the provider body that may echo partial output — must NOT be surfaced.
+        failed_generation = "<think>secret page content..."
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_BadRequest("400"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "max_completion_tokens" in msg
+    assert "4096" in msg                       # the active budget is named
+    assert "secret page content" not in msg    # provider body is never leaked
+
+
+async def test_groq_401_gives_actionable_api_key_error(monkeypatch):
+    """A Groq 401 (expired/wrong key) maps to a named AdapterOutputError that points at
+    GROQ_API_KEY — not the opaque generic message that hid this for a whole session."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _Unauthorized(Exception):
+        status_code = 401
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_Unauthorized("401"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "401" in msg
+    assert "GROQ_API_KEY" in msg
+
+
+async def test_groq_429_gives_actionable_rate_limit_error(monkeypatch):
+    """A 429 (free-tier TPM window exhausted, retries spent) is named as a rate limit
+    pointing at pacing/tier — not the opaque generic message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _RateLimited(Exception):
+        status_code = 429
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_RateLimited("429"))
+    with pytest.raises(AdapterOutputError, match="rate limit"):
+        await adapter(**_PAGE_CONTEXT)
+
+
+async def test_groq_unknown_status_is_named_not_opaque(monkeypatch):
+    """Any other status (e.g. 500) is surfaced with its code, so no Groq failure is
+    ever fully opaque again — the masking that hid the 401 all session."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter()
+
+    class _ServerError(Exception):
+        status_code = 503
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_ServerError("boom"))
+    with pytest.raises(AdapterOutputError, match="HTTP 503"):
+        await adapter(**_PAGE_CONTEXT)
+
+
+async def test_groq_413_too_large_gives_actionable_per_request_limit_error(monkeypatch):
+    """A Groq 413 (prompt + max_completion_tokens over the account's per-request token
+    ceiling) maps to a named AdapterOutputError that explains the cap and the levers —
+    not the opaque generic message."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    adapter = GroqAdapter(model="qwen/qwen3-32b")
+
+    class _TooLarge(Exception):
+        status_code = 413
+
+    adapter._client = MagicMock()
+    adapter._client.chat.completions.create = AsyncMock(side_effect=_TooLarge("413"))
+    with pytest.raises(AdapterOutputError) as exc_info:
+        await adapter(**_PAGE_CONTEXT)
+    msg = str(exc_info.value)
+    assert "413" in msg
+    assert "max_completion_tokens" in msg
 
 
 async def test_groq_api_error_message_does_not_contain_key(monkeypatch):
