@@ -695,6 +695,23 @@ async def test_httpx_fetch_raises_challenge_error_on_interstitial():
         await _fetcher().fetch(f"{_BASE}/bulletin", visited_urls=set())
 
 
+@pytest.mark.asyncio
+async def test_fetch_blocks_host_that_resolves_to_private_ip():
+    """The pinned transport closes the static-A-record gap: a public-looking host whose
+    DNS record points at internal space is refused at connect time (the URL string
+    passes validate_url_safety). No respx — this must reach the real connect path."""
+    import socket
+    from unittest.mock import patch
+
+    from charlotte.exceptions import CharlotteSSRFError
+
+    fetcher = _fetcher(allowed_domains={"internal.test"})
+    gai = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+    with patch("socket.getaddrinfo", return_value=gai):
+        with pytest.raises(CharlotteSSRFError):
+            await fetcher.fetch("http://internal.test/", visited_urls=set())
+
+
 # ---------------------------------------------------------------------------
 # follow_linked_resources — terminal off-domain document retrieval
 # ---------------------------------------------------------------------------

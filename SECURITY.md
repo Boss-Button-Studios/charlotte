@@ -117,13 +117,24 @@ surviving hidden string is untrusted page content, treated as such throughout.
 
 ---
 
-### DNS Rebinding *(partial mitigation)*
+### DNS Rebinding & DNS-name-to-private-IP *(mitigated on httpx paths; render_js residual)*
 
-`validate_url_safety()` performs static checks on the URL string before DNS resolution.
-A DNS rebinding attack — hostname resolves to a public IP at validation time, then a
-private IP at request time — is not detected. Operators in environments where DNS
-rebinding is a realistic threat should apply network-level mitigations (e.g. DNS
-response filtering, egress firewall rules).
+`validate_url_safety()` is a static check on the URL string. On its own it cannot catch a
+hostname whose DNS record points at internal space, nor a rebinding attack (public at
+check time, private at connect time). **The httpx fetch paths (the main page fetcher and
+the destination verifier) now pin the connection**: a custom transport
+(`charlotte/core/pinning_transport.py`) resolves the host, validates **every** resolved
+address against the SSRF policy, and connects to a validated IP — so the address the
+kernel dials is the one that passed the check, with no re-resolution to rebind. The host
+stays the hostname, so TLS SNI / certificate verification are unaffected.
+
+**Residual:** the optional `render_js` (Playwright/Chromium) path is **not** pinned —
+Chromium performs its own DNS resolution. The static `validate_url_safety()` check still
+applies there (URL string, literal/encoded IPs, post-render final URL), but a hostname
+that resolves to a private IP, or a rebinding race, is not closed for `render_js`.
+Operators using `render_js` against untrusted URLs in rebinding-sensitive environments
+should apply network-level mitigations (egress firewall, DNS filtering). Full Chromium
+pinning (`--host-resolver-rules` / intercepting proxy) is a candidate follow-up.
 
 ---
 

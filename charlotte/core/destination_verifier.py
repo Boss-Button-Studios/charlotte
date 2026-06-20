@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 
 from charlotte.config import CharlotteConfig
 from charlotte.core.normalizer import validate_url_safety
+from charlotte.core.pinning_transport import build_pinned_transport
 from charlotte.core.result_writer import (
     commit_temp_result,
     open_temp_result_file,
@@ -472,9 +473,11 @@ class DefaultDestinationVerifier:
             follow_redirects=False,
             timeout=timeout,
             headers=headers,
+            transport=build_pinned_transport(),
         ) as client:
             while True:
-                # SSRF guard on every hop, before any connection is made.
+                # Static SSRF guard on every hop; the pinned transport adds the
+                # connect-time resolve-and-validate (DNS-name-to-private / rebinding).
                 validate_url_safety(current_url)
                 try:
                     async with client.stream("GET", current_url) as resp:
