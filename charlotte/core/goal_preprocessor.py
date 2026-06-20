@@ -377,8 +377,11 @@ def _validate_hybrid_output(
         for k, v in raw_synonyms.items():
             k_clean = _san(k, "synonyms key")
             if not _in_combined(normalize_text(k_clean)):
-                warnings.append(f"near_miss: synonym key {k_clean!r} not in goal/hint, dropped")
-                continue
+                # §4.5.2: a synonym key that doesn't appear in the goal/hint is a hard
+                # rejection, not a silent drop — consistent with negative_terms below and
+                # the confusable-key defense (§11.6). The caller falls back to
+                # deterministic preprocessing for the whole context.
+                raise ValueError(f"synonym key {k_clean!r} not in goal/hint")
             synonyms[k_clean] = [_san(vv, "synonym value")
                                   for vv in (v if isinstance(v, list) else [])
                                   if isinstance(vv, str)]
@@ -439,14 +442,28 @@ def _validate_hybrid_output(
 
     description = _san(str(raw.get("description", "")), "description")
 
-    # §4.5.5 rough 4KB size cap on post-normalization context
-    size_estimate = (
-        len(goal) + len(navigation_hint or "") + len(description)
-        + sum(len(k) + sum(len(v) for v in vs) for k, vs in synonyms.items())
-        + sum(len(t) for t in anchor_terms + negative_terms + regex_hints)
+    # §4.5.5: the 4 KB cap is on the post-normalization *serialized* form (the cached
+    # value), measured in bytes — not a sum of field-length char counts. Serialize the
+    # semantic fields deterministically and measure the UTF-8 byte length so the bound
+    # accounts for structure and multi-byte characters.
+    serialized = json.dumps(
+        {
+            "goal": goal,
+            "navigation_hint": navigation_hint,
+            "goal_type": goal_type,
+            "goal_type_confidence": float(conf),
+            "synonyms": synonyms,
+            "anchor_terms": anchor_terms,
+            "negative_terms": negative_terms,
+            "regex_hints": regex_hints,
+            "description": description,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
     )
-    if size_estimate > 4096:
-        raise ValueError(f"GoalContext exceeds 4KB cap ({size_estimate} bytes)")
+    size_bytes = len(serialized.encode("utf-8"))
+    if size_bytes > 4096:
+        raise ValueError(f"GoalContext exceeds 4KB cap ({size_bytes} bytes)")
 
     return GoalContext(
         goal=goal,

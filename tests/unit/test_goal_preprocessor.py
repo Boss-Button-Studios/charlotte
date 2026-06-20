@@ -549,20 +549,15 @@ def test_hybrid_falls_back_on_invalid_goal_type():
 
 
 @respx.mock
-def test_hybrid_synonym_key_not_in_goal_is_dropped():
+def test_hybrid_synonym_key_not_in_goal_causes_fallback():
+    """§4.5.2: a synonym key absent from the goal/hint is a hard rejection — the whole
+    model context is rejected and Charlotte falls back to deterministic preprocessing,
+    matching negative_terms behavior (FUN-3). It is not silently dropped."""
     bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {"unrelated_term": ["something"]}}
     respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
     ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
-    assert ctx.source == "model"
+    assert ctx.source == "deterministic"
     assert "unrelated_term" not in ctx.synonyms
-
-
-@respx.mock
-def test_hybrid_warning_recorded_for_dropped_synonym():
-    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {"unrelated_term": ["x"]}}
-    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
-    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
-    assert any("near_miss" in w and "unrelated_term" in w for w in ctx.validation_warnings)
 
 
 @respx.mock
@@ -621,6 +616,17 @@ def test_hybrid_falls_back_on_invalid_confidence():
 @respx.mock
 def test_hybrid_falls_back_on_oversized_context():
     bad = {**_VALID_HYBRID_OUTPUT, "description": "x" * 5000}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
+def test_hybrid_size_cap_counts_utf8_bytes_not_chars():
+    """FUN-4: the cap measures the serialized form in bytes. 2000 three-byte characters
+    are well under 4096 *chars* (so the old field-length estimate passed) but exceed
+    4096 *bytes*, so the context must now be rejected → fallback."""
+    bad = {**_VALID_HYBRID_OUTPUT, "description": "あ" * 2000}  # 2000 chars, 6000 UTF-8 bytes
     respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
     ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
     assert ctx.source == "deterministic"

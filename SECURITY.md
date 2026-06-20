@@ -4,8 +4,18 @@
 
 | Version | Supported |
 |---------|-----------|
+| 1.2.x   | Yes       |
 | 1.1.x   | Yes       |
 | 1.0.x   | Yes       |
+
+> **Package version vs. spec version.** The package version
+> (`charlotte.__version__`, currently `1.2.0`) tracks the release and is what you
+> should check to know "what I installed." It is a *different* numbering scheme from
+> the technical **specification** the code implements
+> (`docs/charlotte-spec-v2.0.2.md`): the 1.2.x line ships the v2.0.2 feature set
+> (`ResultContent` / `result_to_file`, the goal preprocessor, link ranker, candidate
+> extractor, and destination verifier). A future release may align the package version
+> with the spec level; until then, map advisories by the package version above.
 
 ## Reporting a Vulnerability
 
