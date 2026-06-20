@@ -376,7 +376,11 @@ def _validate_hybrid_output(
     if isinstance(raw_synonyms, dict):
         for k, v in raw_synonyms.items():
             k_clean = _san(k, "synonyms key")
-            if not _in_combined(normalize_text(k_clean)):
+            k_norm = normalize_text(k_clean)
+            # An empty/whitespace key normalizes to "" and would match _in_combined
+            # trivially (the boundary look-arounds are satisfied at any position), so it
+            # must be rejected explicitly — otherwise it bypasses the membership rule.
+            if not k_norm or not _in_combined(k_norm):
                 # §4.5.2: a synonym key that doesn't appear in the goal/hint is a hard
                 # rejection, not a silent drop — consistent with negative_terms below and
                 # the confusable-key defense (§11.6). The caller falls back to

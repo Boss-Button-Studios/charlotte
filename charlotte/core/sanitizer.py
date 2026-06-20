@@ -71,9 +71,15 @@ def _is_hidden(tag) -> bool:
     return False
 
 
-# Matches a flat CSS rule "selector(s) { declarations }". Nested at-rules (e.g.
-# @media) are not parsed — see the strip_hidden docstring for the documented limits.
+# Matches a flat CSS rule "selector(s) { declarations }".
 _CSS_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
+
+# Matches a whole at-rule block (e.g. @media …{ .x{display:none} }), including one level
+# of nested rules. These are stripped before flat-rule extraction so a rule that only
+# hides under a media/feature query is NOT treated as an unconditional selector — that
+# would over-remove content that is actually visible. At-rule-nested hiding is a
+# documented out-of-scope case (see strip_hidden), so dropping it here is intentional.
+_AT_RULE_BLOCK_RE = re.compile(r"@[a-zA-Z-]+[^{]*\{(?:[^{}]|\{[^{}]*\})*\}", re.DOTALL)
 
 
 def _hidden_selectors_from_styles(soup) -> list[str]:
@@ -88,7 +94,10 @@ def _hidden_selectors_from_styles(soup) -> list[str]:
     """
     selectors: list[str] = []
     for style_tag in soup.find_all("style"):
-        for raw_selector, body in _CSS_RULE_RE.findall(style_tag.get_text()):
+        # Drop at-rule blocks first so their conditionally-applied inner rules are not
+        # mistaken for unconditional flat rules.
+        css = _AT_RULE_BLOCK_RE.sub("", style_tag.get_text())
+        for raw_selector, body in _CSS_RULE_RE.findall(css):
             declarations = re.sub(r"\s+", "", body.lower())
             if "display:none" in declarations or "visibility:hidden" in declarations:
                 for sel in raw_selector.split(","):

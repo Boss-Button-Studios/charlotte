@@ -549,6 +549,16 @@ def test_hybrid_falls_back_on_invalid_goal_type():
 
 
 @respx.mock
+def test_hybrid_empty_synonym_key_causes_fallback():
+    """An empty/whitespace synonym key normalizes to "" and would match the membership
+    check trivially — it must be rejected (hard) → fallback, not bypass it."""
+    bad = {**_VALID_HYBRID_OUTPUT, "synonyms": {"   ": ["x"]}}
+    respx.post(_HYBRID_ENDPOINT).mock(return_value=_mock_response(json.dumps(bad)))
+    ctx = HybridPreprocessor()("Find the Python tutorial page", None, "en_US")
+    assert ctx.source == "deterministic"
+
+
+@respx.mock
 def test_hybrid_synonym_key_not_in_goal_causes_fallback():
     """§4.5.2: a synonym key absent from the goal/hint is a hard rejection — the whole
     model context is rejected and Charlotte falls back to deterministic preprocessing,

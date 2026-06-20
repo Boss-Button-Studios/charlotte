@@ -490,3 +490,25 @@ def test_invalid_stylesheet_selector_does_not_crash():
     )
     result = strip_hidden(html)   # must not raise
     assert "Visible" in result
+
+
+def test_media_query_nested_rule_does_not_over_remove():
+    """A display:none rule nested in @media must not be applied as an unconditional
+    selector — content visible outside that media query must survive (CR follow-up)."""
+    html = (
+        "<html><head><style>@media print { .x { display:none } }</style></head>"
+        '<body><p class="x">Visible on screen</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Visible on screen" in result
+
+
+def test_flat_rule_outside_at_rule_still_removed():
+    """A flat display:none rule alongside an @media block is still applied."""
+    html = (
+        "<html><head><style>@media print{.p{color:red}} .hide{display:none}</style></head>"
+        '<body><p class="hide">Gone</p><p>Stay</p></body></html>'
+    )
+    result = strip_hidden(html)
+    assert "Gone" not in result
+    assert "Stay" in result
