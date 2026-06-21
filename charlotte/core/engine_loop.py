@@ -82,6 +82,7 @@ async def _crawl_core(
     start_url: str,
     goal: str,
     max_pages: int,
+    total_timeout: "float | None",
     max_depth: int,
     max_results: "int | None",
     confidence_threshold: float,
@@ -179,9 +180,17 @@ async def _crawl_core(
         best_url: str | None = None
         best_conf: float = 0.0
         depth_budget_used = False
+        time_budget_exhausted = False
         n_verified = 0   # model-confirmed candidates sent to verifier
 
         while queue and pages_visited < max_pages:
+            # Wall-clock budget (§S-M3): stop before starting another page once the
+            # total_timeout is spent. Checked between pages — a page already in flight
+            # completes (bounded by its own connect/read/render and model timeouts).
+            if total_timeout is not None and (monotonic() - start_time) >= total_timeout:
+                time_budget_exhausted = True
+                break
+
             _, _, url, depth = heapq.heappop(queue)
 
             try:
@@ -541,7 +550,7 @@ async def _crawl_core(
                 best_url = output.result_url or page.url
 
         stopped_at_limit = pages_visited >= max_pages and bool(queue)
-        budget_exhausted = stopped_at_limit or depth_budget_used
+        budget_exhausted = stopped_at_limit or depth_budget_used or time_budget_exhausted
 
         found = bool(result_urls)
         if not found and budget_exhausted:

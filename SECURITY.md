@@ -47,17 +47,21 @@ is deployed in high-assurance environments.
 
 ---
 
-### S-M3 — No wall-clock crawl budget *(Medium, deferred)*
+### S-M3 — Wall-clock crawl budget *(resolved)*
 
 Charlotte enforces a page budget (`max_pages`) and per-request timeouts
-(`connect_timeout`, `read_timeout`, `render_timeout`) but not a total elapsed time.
-A target site that responds at exactly `read_timeout - 1` seconds per request can pin
-a worker for `max_pages × read_timeout` ≈ 10 minutes on defaults. A slow model
-endpoint compounds this. The plausibility retry path can double the time budget for a
-single page.
+(`connect_timeout`, `read_timeout`, `render_timeout`), and now also a total elapsed-time
+budget. Pass **`total_timeout`** (seconds) to `crawl()` / `find_link()`: the budget is
+checked between pages, so once it is spent the crawl stops and returns what it has with
+`budget_exhausted` set (and a `BudgetExhausted` event in stream mode). This bounds the
+cumulative `max_pages × read_timeout` exposure that previously let a slow site pin a
+worker for ~10 minutes on defaults.
 
-**Workaround:** Wrap `crawl()` in `asyncio.wait_for()` if you need a hard wall-clock
-limit. A `total_timeout` parameter is planned for a future release.
+A single page already in flight when the deadline passes is allowed to finish, so the
+practical bound is `total_timeout` plus one page — itself bounded by that page's
+connect/read/render and model timeouts. For a strictly hard ceiling, callers can still
+also wrap `crawl()` in `asyncio.wait_for()`. `total_timeout` defaults to `None` (no
+limit), preserving prior behavior.
 
 ---
 

@@ -444,6 +444,59 @@ async def test_max_pages_budget_exhausted():
 
 
 @respx.mock
+async def test_total_timeout_stops_crawl_with_budget_exhausted(monkeypatch):
+    """S-M3: a wall-clock total_timeout stops the crawl between pages and reports
+    budget_exhausted. A shared clock (patched into the loop) is advanced by the model
+    call, so the deadline trips after page 1 even though max_pages allows more."""
+    _mock_404_robots()
+    html = '<html><body><a href="/a">A</a><a href="/b">B</a></body></html>'
+    respx.get(_START).mock(return_value=httpx.Response(200, text=html))
+    respx.get(f"{_BASE}/a").mock(return_value=httpx.Response(200, text="<html><body>a</body></html>"))
+    respx.get(f"{_BASE}/b").mock(return_value=httpx.Response(200, text="<html><body>b</body></html>"))
+
+    clock = [0.0]
+    monkeypatch.setattr("charlotte.core.engine_loop.monotonic", lambda: clock[0])
+
+    async def _slow_adapter(*, schema_hint=None, available_links, **kwargs):
+        clock[0] += 100.0   # the model call burns wall-clock past the 1s budget
+        return {
+            "found": False, "confidence": 0.2, "result_url": None,
+            "links_to_follow": [link["url"] for link in available_links][:3],
+            "reasoning": "Not here.",
+        }
+
+    result = await crawl(
+        _START, _GOAL, model=_slow_adapter, max_pages=10, total_timeout=1.0,
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+    assert result.found is False
+    assert result.budget_exhausted is True
+    assert result.pages_visited == 1   # page 1 ran; deadline tripped before page 2
+
+
+@respx.mock
+async def test_total_timeout_none_runs_to_completion(monkeypatch):
+    """total_timeout=None (default) imposes no wall-clock limit — the crawl runs out the
+    normal page/queue budget regardless of elapsed time."""
+    _mock_404_robots()
+    respx.get(_START).mock(return_value=httpx.Response(200, text='<html><body><a href="/a">A</a></body></html>'))
+    respx.get(f"{_BASE}/a").mock(return_value=httpx.Response(200, text="<html><body>a</body></html>"))
+
+    result = await crawl(
+        _START, _GOAL, model=_adapter_never_found(), max_pages=2, total_timeout=None,
+        stream=False, respect_robots=True, default_delay=0.0,
+    )
+    assert result.pages_visited == 2   # not cut short by time
+
+
+async def test_total_timeout_rejects_non_positive():
+    from charlotte.exceptions import CharlotteConfigError
+    for bad in (0, -5, float("inf")):
+        with pytest.raises(CharlotteConfigError, match="total_timeout"):
+            await crawl(_START, _GOAL, model=_adapter_never_found(), total_timeout=bad, stream=False)
+
+
+@respx.mock
 async def test_budget_exhausted_event_emitted_when_not_found():
     _mock_404_robots()
     html = '<html><body><a href="/a">A</a></body></html>'
@@ -1875,7 +1928,6 @@ def test_fresher_exploration_links_filters_stale_and_irrelevant():
     """Returns goal-relevant, unvisited, non-stale links — excluding the stale
     claim, other stale documents, and zero-score (irrelevant) links."""
     from datetime import date
-    from charlotte.core.normalizer import normalize_url
     ref = date(2026, 6, 16)
     stale_pdf = "http://example.com/bulletins/20260301B.pdf"
     older_pdf = "http://example.com/bulletins/20260201B.pdf"

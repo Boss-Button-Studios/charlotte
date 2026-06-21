@@ -75,6 +75,7 @@ def find_link(
     fetch_result_content: "bool | None" = None,
     max_result_bytes: int = 10_485_760,
     result_to_file: "Path | None" = None,
+    total_timeout: "float | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Find all links matching *goal* starting from *start_url*.
 
@@ -122,6 +123,8 @@ def find_link(
         result_to_file:       Directory for file-based content delivery.
                               When set, LinkResult.result_content.file_path is
                               populated and .content is None. See spec §7.7.
+        total_timeout:        Wall-clock budget in seconds for the whole search, or
+                              None (default) for no limit. Checked between pages.
 
     Returns:
         AsyncGenerator[StreamEvent, None] when stream=True.
@@ -157,6 +160,7 @@ def find_link(
         fetch_result_content=fetch_result_content,
         max_result_bytes=max_result_bytes,
         result_to_file=result_to_file,
+        total_timeout=total_timeout,
     )
 
     resolved_stream = CharlotteConfig.stream() if stream is None else stream
