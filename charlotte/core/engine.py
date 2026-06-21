@@ -78,6 +78,7 @@ def crawl(
     fetch_result_content: "bool | None" = None,
     max_result_bytes: int = 10_485_760,
     result_to_file: "Path | None" = None,
+    total_timeout: "float | None" = None,
 ) -> "AsyncGenerator[StreamEvent, None] | Any":
     """Navigate toward *goal* starting from *start_url*. See spec §4, §5.1.
 
@@ -89,6 +90,12 @@ def crawl(
         verify_threshold:    BM25/embedding threshold (default 0.3). See spec §7.3.
         fetch_result_content: Capture bytes per result. None = on for document_link.
         result_to_file:      Directory for file-based content delivery. See spec §7.7.
+        total_timeout:       Wall-clock ceiling in seconds for the whole crawl, or None
+                             (default) for no limit. Checked between pages: once the
+                             budget is spent the crawl stops and returns what it has
+                             with budget_exhausted set. Bounds the cumulative
+                             max_pages × per-request time; a single in-flight page is
+                             still bounded by connect/read/render and the model timeout.
         follow_linked_resources: If True, permit fetching an off-domain *document*
                              (PDF/etc.) that an in-scope page links to — a terminal,
                              one-hop resource fetch. Off-domain HTML is never
@@ -109,6 +116,15 @@ def crawl(
     if not math.isfinite(render_timeout) or render_timeout <= 0:
         raise CharlotteConfigError(
             f"render_timeout must be a finite positive number, got: {render_timeout!r}"
+        )
+    if total_timeout is not None and (
+        not isinstance(total_timeout, (int, float))
+        or isinstance(total_timeout, bool)          # bool is an int subclass — reject it
+        or not math.isfinite(total_timeout)
+        or total_timeout <= 0
+    ):
+        raise CharlotteConfigError(
+            f"total_timeout must be a finite positive number or None, got: {total_timeout!r}"
         )
     if model is None:
         model = _resolve_default_adapter()
@@ -158,6 +174,7 @@ def crawl(
         start_url=normalized_start,
         goal=goal,
         max_pages=max_pages,
+        total_timeout=total_timeout,
         max_depth=max_depth,
         max_results=max_results,
         confidence_threshold=confidence_threshold,

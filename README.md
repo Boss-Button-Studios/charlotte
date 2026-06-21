@@ -191,6 +191,7 @@ crawl(
     render_timeout=15.0,        # float — JS settle timeout for Playwright (seconds)
     default_delay=1.0,          # float — floor for polite inter-request delay (seconds)
     chromium_executable=None,   # str | None — path to Chromium binary (Playwright)
+    total_timeout=None,         # float | None — wall-clock budget (s); stop between pages when spent
 )
 ```
 
