@@ -117,12 +117,13 @@ surviving hidden string is untrusted page content, treated as such throughout.
 
 ---
 
-### DNS Rebinding & DNS-name-to-private-IP *(mitigated on httpx paths; render_js residual)*
+### DNS Rebinding & DNS-name-to-private-IP *(mitigated on crawl-fetch paths; render_js residual)*
 
 `validate_url_safety()` is a static check on the URL string. On its own it cannot catch a
 hostname whose DNS record points at internal space, nor a rebinding attack (public at
-check time, private at connect time). **The httpx fetch paths (the main page fetcher and
-the destination verifier) now pin the connection**: a custom transport
+check time, private at connect time). **The crawl-target httpx fetches (the page fetcher,
+the destination verifier, and the robots.txt fetch) now pin the connection**: a custom
+transport
 (`charlotte/core/pinning_transport.py`) resolves the host, validates **every** resolved
 address against the SSRF policy, and connects to a validated IP — so the address the
 kernel dials is the one that passed the check, with no re-resolution to rebind. The host
@@ -153,9 +154,15 @@ paths (logging, serialization, debugger summaries).
 ## Security Architecture Notes
 
 - **SSRF protection**: `validate_url_safety()` in `charlotte/core/normalizer.py` blocks
-  non-http/https schemes, cloud metadata endpoints, private IP ranges, loopback, and
-  `localhost`. It is called before every HTTP request (initial URL and redirect
-  destinations) as well as on `start_url` before the crawl generator starts.
+  non-http/https schemes, cloud metadata endpoints, private and CGNAT IP ranges
+  (including alternate encodings), loopback, and `localhost`. It runs before every
+  **crawl-target** HTTP fetch — the page fetcher, the destination verifier, and the
+  robots.txt fetch (initial URL and redirect destinations) — and on `start_url` before
+  the crawl generator starts. Those three paths additionally pin the connection to a
+  validated IP (see DNS Rebinding below). The clients that talk to the **model
+  endpoint** (goal preprocessor, `LocalAdapter`) target the operator-configured model
+  URL rather than a crawl target, so they are deliberately not pinned; if a deployment
+  lets untrusted input choose the model `base_url`, validate it at that boundary.
 
 - **Model output sanitization**: Adapter output is sanitized in
   `charlotte/core/adapter_validation.py` before any field reaches caller-visible

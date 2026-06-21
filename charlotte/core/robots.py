@@ -34,6 +34,8 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from charlotte.config import HTTP_USER_AGENT
+from charlotte.core.normalizer import validate_url_safety
+from charlotte.core.pinning_transport import build_pinned_transport
 from charlotte.exceptions import CharlotteInternalError, RobotsError
 
 _CHARLOTTE_UA: str = "charlotte-crawler"
@@ -138,10 +140,18 @@ class RobotsHandler:
         )
 
         try:
+            # SSRF: robots.check() runs on attacker-influenced hosts (cross-domain
+            # redirect destinations, links extracted from untrusted pages), so this
+            # fetch must be guarded like the page fetcher and verifier — static check
+            # on the URL plus connect-time IP pinning (which also covers any redirect
+            # hops). A host that fails the check raises and is caught below, so the
+            # domain is treated as uncrawlable rather than reached.
+            validate_url_safety(robots_url)
             async with httpx.AsyncClient(
                 timeout=timeout,
                 headers={"User-Agent": self._user_agent},
                 follow_redirects=True,
+                transport=build_pinned_transport(),
             ) as client:
                 response = await client.get(robots_url)
         except httpx.TimeoutException:

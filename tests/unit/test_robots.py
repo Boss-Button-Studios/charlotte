@@ -402,3 +402,28 @@ async def test_unexpected_internal_exception_raises_internal_error(monkeypatch):
     monkeypatch.setattr(handler, "_do_check", _boom)
     with pytest.raises(CharlotteInternalError):
         await handler.check(_PAGE, _DEFAULT_DELAY)
+
+
+# ---------------------------------------------------------------------------
+# R-1 — SSRF guard on the robots.txt fetch
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_robots_literal_private_host_not_fetched():
+    """A robots host that is a literal non-public IP is refused by the static check
+    before any connection — the domain is treated as uncrawlable."""
+    entry = await _handler()._fetch_and_parse("http", "169.254.169.254")
+    assert entry.blocked is True
+
+
+@pytest.mark.asyncio
+async def test_robots_host_resolving_to_private_ip_not_fetched():
+    """R-1 reproduction: a public-looking robots host whose DNS points at internal space
+    must be blocked at connect time by the pinned transport, never actually fetched."""
+    import socket
+    from unittest.mock import patch
+
+    gai = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+    with patch("socket.getaddrinfo", return_value=gai):
+        entry = await _handler()._fetch_and_parse("http", "internal.evil.test")
+    assert entry.blocked is True
