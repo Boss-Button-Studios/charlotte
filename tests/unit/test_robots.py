@@ -408,22 +408,39 @@ async def test_unexpected_internal_exception_raises_internal_error(monkeypatch):
 # R-1 — SSRF guard on the robots.txt fetch
 # ---------------------------------------------------------------------------
 
+@respx.mock
 @pytest.mark.asyncio
 async def test_robots_literal_private_host_not_fetched():
     """A robots host that is a literal non-public IP is refused by the static check
-    before any connection — the domain is treated as uncrawlable."""
+    before any connection. The mocked route would serve a 200 if a request escaped the
+    guard; asserting it is never called proves the block happens *before* the fetch, not
+    via a generic network failure."""
+    route = respx.get("http://169.254.169.254/robots.txt").mock(
+        return_value=httpx.Response(200, text="")
+    )
     entry = await _handler()._fetch_and_parse("http", "169.254.169.254")
     assert entry.blocked is True
+    assert not route.called   # no HTTP request was ever issued
 
 
 @pytest.mark.asyncio
 async def test_robots_host_resolving_to_private_ip_not_fetched():
     """R-1 reproduction: a public-looking robots host whose DNS points at internal space
-    must be blocked at connect time by the pinned transport, never actually fetched."""
+    must be blocked at connect time by the pinned transport, never actually dialed. The
+    spy on the wrapped backend's connect proves the pin refused before any TCP dial — a
+    generic network failure would have reached it."""
     import socket
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock, patch
+
+    from charlotte.core.pinning_transport import build_pinned_transport
+
+    transport = build_pinned_transport()
+    dial_spy = AsyncMock(side_effect=AssertionError("dialed a non-public address"))
+    transport._pool._network_backend._wrapped.connect_tcp = dial_spy
 
     gai = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
-    with patch("socket.getaddrinfo", return_value=gai):
+    with patch("socket.getaddrinfo", return_value=gai), \
+         patch("charlotte.core.robots.build_pinned_transport", return_value=transport):
         entry = await _handler()._fetch_and_parse("http", "internal.evil.test")
     assert entry.blocked is True
+    dial_spy.assert_not_called()   # the SSRF pin refused before any connect
