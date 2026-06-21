@@ -117,7 +117,12 @@ def crawl(
         raise CharlotteConfigError(
             f"render_timeout must be a finite positive number, got: {render_timeout!r}"
         )
-    if total_timeout is not None and (not math.isfinite(total_timeout) or total_timeout <= 0):
+    if total_timeout is not None and (
+        not isinstance(total_timeout, (int, float))
+        or isinstance(total_timeout, bool)          # bool is an int subclass — reject it
+        or not math.isfinite(total_timeout)
+        or total_timeout <= 0
+    ):
         raise CharlotteConfigError(
             f"total_timeout must be a finite positive number or None, got: {total_timeout!r}"
         )

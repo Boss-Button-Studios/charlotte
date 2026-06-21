@@ -59,9 +59,9 @@ worker for ~10 minutes on defaults.
 
 A single page already in flight when the deadline passes is allowed to finish, so the
 practical bound is `total_timeout` plus one page — itself bounded by that page's
-connect/read/render and model timeouts. For a strictly hard ceiling, callers can still
-also wrap `crawl()` in `asyncio.wait_for()`. `total_timeout` defaults to `None` (no
-limit), preserving prior behavior.
+connect/read/render and model timeouts. For a strictly hard ceiling, wrap `crawl()` in
+`asyncio.wait_for()`. `total_timeout` defaults to `None` (no limit), preserving prior
+behavior.
 
 ---
 

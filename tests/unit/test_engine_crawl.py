@@ -489,9 +489,11 @@ async def test_total_timeout_none_runs_to_completion(monkeypatch):
     assert result.pages_visited == 2   # not cut short by time
 
 
-async def test_total_timeout_rejects_non_positive():
+async def test_total_timeout_rejects_invalid_values():
+    """Non-positive, non-finite, and non-numeric inputs all surface as the named
+    CharlotteConfigError — never a raw ValueError/TypeError."""
     from charlotte.exceptions import CharlotteConfigError
-    for bad in (0, -5, float("inf")):
+    for bad in (0, -5, float("inf"), float("nan"), "1", {}, [], True):
         with pytest.raises(CharlotteConfigError, match="total_timeout"):
             await crawl(_START, _GOAL, model=_adapter_never_found(), total_timeout=bad, stream=False)
 
