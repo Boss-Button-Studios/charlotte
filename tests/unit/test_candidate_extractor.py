@@ -376,6 +376,21 @@ async def test_price_currency_code():
 
 
 @pytest.mark.asyncio
+async def test_price_extractor_no_redos_on_long_comma_run():
+    """EX-1 regression: a long comma-number run with no currency suffix (a plausible
+    big-table page) must extract in linear time. Pre-fix this backtracked
+    quadratically — ~10s at 16 KB; here a 64 KB run must finish near-instantly."""
+    import time
+
+    page = _page("1," * 32_000 + "X")   # 64 KB of digit/comma run, no currency
+    ctx = _goal_context(goal_type="price_extraction")
+    start = time.perf_counter()
+    await PriceExtractor()(goal_context=ctx, page=page)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"price extraction took {elapsed:.2f}s — possible ReDoS regression"
+
+
+@pytest.mark.asyncio
 async def test_price_empty_page():
     page = _page("No prices here.")
     ctx = _goal_context(goal_type="price_extraction")
