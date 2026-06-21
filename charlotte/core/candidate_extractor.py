@@ -368,9 +368,15 @@ class AddressExtractor:
 # PriceExtractor
 # ---------------------------------------------------------------------------
 
+# EX-1 (audit pass 3): the digit/comma run is possessive (++) and, in the
+# currency-suffix alternative, anchored with a (?<![\d,]) look-behind so it only
+# matches at the start of a run. Without the look-behind, finditer re-attempts at
+# every interior position and each attempt re-scans the run, giving O(n²) work
+# (a ReDoS) on a long comma-number table in untrusted page text. The look-behind
+# makes interior positions fail in O(1), collapsing it to linear.
 _PRICE_RE = re.compile(
-    r"(?:[$€£¥₹])\s*[\d,]+(?:\.\d{1,2})?"
-    r"|[\d,]+(?:\.\d{1,2})?\s*(?:USD|EUR|GBP|JPY|CAD|AUD)\b",
+    r"(?:[$€£¥₹])\s*[\d,]++(?:\.\d{1,2})?"
+    r"|(?<![\d,])[\d,]++(?:\.\d{1,2})?\s*(?:USD|EUR|GBP|JPY|CAD|AUD)\b",
     re.IGNORECASE,
 )
 
