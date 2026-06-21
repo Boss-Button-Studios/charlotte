@@ -155,11 +155,13 @@ paths (logging, serialization, debugger summaries).
 
 - **SSRF protection**: `validate_url_safety()` in `charlotte/core/normalizer.py` blocks
   non-http/https schemes, cloud metadata endpoints, private and CGNAT IP ranges
-  (including alternate encodings), loopback, and `localhost`. It runs before every
-  **crawl-target** HTTP fetch — the page fetcher, the destination verifier, and the
-  robots.txt fetch (initial URL and redirect destinations) — and on `start_url` before
-  the crawl generator starts. Those three paths additionally pin the connection to a
-  validated IP (see DNS Rebinding below). The clients that talk to the **model
+  (including alternate encodings), loopback, and `localhost`. It runs on the initial URL
+  of every **crawl-target** HTTP fetch — the page fetcher, the destination verifier, and
+  the robots.txt fetch — and on `start_url` before the crawl generator starts. The page
+  fetcher and verifier follow redirects manually and re-run the static check on **each
+  redirect destination**; the robots fetch follows redirects through the pinned transport,
+  so its hops are validated at the connection rather than by the static check. All three
+  paths pin the connection to a validated IP (see DNS Rebinding below). The clients that talk to the **model
   endpoint** (goal preprocessor, `LocalAdapter`) target the operator-configured model
   URL rather than a crawl target, so they are deliberately not pinned; if a deployment
   lets untrusted input choose the model `base_url`, validate it at that boundary.

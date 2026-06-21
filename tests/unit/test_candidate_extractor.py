@@ -376,18 +376,32 @@ async def test_price_currency_code():
 
 
 @pytest.mark.asyncio
-async def test_price_extractor_no_redos_on_long_comma_run():
+async def test_price_extractor_scales_linearly_no_redos():
     """EX-1 regression: a long comma-number run with no currency suffix (a plausible
-    big-table page) must extract in linear time. Pre-fix this backtracked
-    quadratically — ~10s at 16 KB; here a 64 KB run must finish near-instantly."""
+    big-table page) must extract in ~linear time. Checked *relatively* so it doesn't
+    depend on absolute machine speed: doubling the input should ~double the time for a
+    linear scan; the pre-fix quadratic backtracking made it ~quadruple (and seconds in
+    absolute terms). Min-of-runs damps scheduler noise."""
     import time
 
-    page = _page("1," * 32_000 + "X")   # 64 KB of digit/comma run, no currency
     ctx = _goal_context(goal_type="price_extraction")
-    start = time.perf_counter()
-    await PriceExtractor()(goal_context=ctx, page=page)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 1.0, f"price extraction took {elapsed:.2f}s — possible ReDoS regression"
+
+    async def best_time(n: int) -> float:
+        page = _page("1," * n + "X")
+        best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            await PriceExtractor()(goal_context=ctx, page=page)
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    small = await best_time(100_000)
+    large = await best_time(200_000)   # 2x the input
+    # Linear ⇒ ratio ≈ 2; the pre-fix quadratic ⇒ ≈ 4. A 3x ceiling separates the two
+    # with margin for timing jitter.
+    assert large < small * 3, (
+        f"price extraction took {large/small:.1f}x longer for 2x input — possible ReDoS regression"
+    )
 
 
 @pytest.mark.asyncio

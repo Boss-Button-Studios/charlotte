@@ -139,6 +139,12 @@ class RobotsHandler:
             pool=None,
         )
 
+        # Built outside the try on purpose: build_pinned_transport() fails loudly with
+        # CharlotteConfigError if httpx's internals drift and the pinning seam is gone.
+        # That is an infrastructure fault, not an unreachable domain — it must propagate,
+        # not be swallowed into a generic "uncrawlable" result that silently drops the pin.
+        transport = build_pinned_transport()
+
         try:
             # SSRF: robots.check() runs on attacker-influenced hosts (cross-domain
             # redirect destinations, links extracted from untrusted pages), so this
@@ -151,7 +157,7 @@ class RobotsHandler:
                 timeout=timeout,
                 headers={"User-Agent": self._user_agent},
                 follow_redirects=True,
-                transport=build_pinned_transport(),
+                transport=transport,
             ) as client:
                 response = await client.get(robots_url)
         except httpx.TimeoutException:
