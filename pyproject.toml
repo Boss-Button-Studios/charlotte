@@ -39,12 +39,17 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "respx>=0.20.0",
     "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "build>=1.0.0",
+    "twine>=5.0.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Boss-Button-Studios/charlotte"
+Documentation = "https://github.com/Boss-Button-Studios/charlotte#readme"
 Repository = "https://github.com/Boss-Button-Studios/charlotte"
 Issues = "https://github.com/Boss-Button-Studios/charlotte/issues"
+Changelog = "https://github.com/Boss-Button-Studios/charlotte/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
