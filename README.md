@@ -335,10 +335,12 @@ All Charlotte exceptions inherit from `CharlotteError`. Third-party exceptions (
 
 ## Specification
 
-The full technical specification — adapter authoring guide, streaming events reference, security model, URL normalization rules — is at `docs/charlotte-spec-v2.0.2.md` (current; the v1.4 and v2.0/v2.0.1 documents are kept as historical reference).
+The full technical specification — adapter authoring guide, streaming events reference, security model, URL normalization rules — is [`charlotte-spec-v2.0.2.md`](https://github.com/Boss-Button-Studios/charlotte/blob/main/docs/charlotte-spec-v2.0.2.md) (current; the v1.4 and v2.0/v2.0.1 documents are kept as historical reference).
+
+The specification document is versioned independently of the package: this release ships as **`charlotte-crawler` 1.2.0** and implements the **v2.0.2** spec. The spec is a design reference kept in the repository — it is not bundled in the installed package.
 
 ---
 
-## Licence
+## License
 
-MIT — see `LICENSE`.
+MIT — see [LICENSE](https://github.com/Boss-Button-Studios/charlotte/blob/main/LICENSE).

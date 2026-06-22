@@ -43,8 +43,10 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Boss-Button-Studios/charlotte"
+Documentation = "https://github.com/Boss-Button-Studios/charlotte#readme"
 Repository = "https://github.com/Boss-Button-Studios/charlotte"
 Issues = "https://github.com/Boss-Button-Studios/charlotte/issues"
+Changelog = "https://github.com/Boss-Button-Studios/charlotte/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
